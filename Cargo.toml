@@ -1,0 +1,22 @@
+[package]
+name = "rscope"
+version = "0.1.0"
+authors = ["Flier Lu <flier.lu@gmail.com>"]
+license = "MIT/Apache-2.0"
+description = "Rust parser/generator for cscope"
+repository = "https://github.com/flier/rust-rscope"
+
+[dependencies]
+log = "0.3"
+env_logger = "0.3"
+
+getopts = "0.2"
+num_cpus = "0.2"
+cargo = "0.10"
+
+syntex = "*"
+syntex_syntax = "*"
+
+[[bin]]
+name = "rscope"
+path = "src/main.rs"
