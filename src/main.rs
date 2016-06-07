@@ -30,41 +30,6 @@ struct AppConf {
 }
 
 impl AppConf {
-    fn load_targets(&self, cargo_conf: &Config) -> Result<Vec<(PathBuf, Target)>> {
-        let mut targets = Vec::new();
-
-        for dir in &self.dirs {
-            let (package, packages) = try!(loader::load_crate(&dir, cargo_conf));
-
-            targets.extend(package.targets()
-                .iter()
-                .map(|target| (PathBuf::from(package.root()), target.clone())));
-
-            for dep in package.dependencies() {
-                debug!("found dependency; name={}, version={}, locked={}",
-                       dep.name(),
-                       dep.version_req(),
-                       dep.specified_req().unwrap_or("N/A"));
-            }
-
-            for package_id in packages.package_ids() {
-                let package = try!(packages.get(package_id));
-
-                info!("resolved package; {}, root={}",
-                      package,
-                      package.root().to_str().unwrap());
-
-                for target in package.targets() {
-                    if target.is_lib() {
-                        targets.push((PathBuf::from(package.root()), target.clone()))
-                    }
-                }
-            }
-        }
-
-        Ok(targets)
-    }
-
     fn start_parsers(&self,
                      targets: Arc<Mutex<Vec<(PathBuf, Target)>>>)
                      -> mpsc::Receiver<parser::SourceFile> {
@@ -187,8 +152,16 @@ fn main() {
 
     let cargo_conf = Config::default().expect("fail to initial cargo");
 
-    let targets = Arc::new(Mutex::new(app_conf.load_targets(&cargo_conf)
-        .expect("fail to load targets")));
+    let targets = Arc::new(Mutex::new(app_conf.dirs
+        .iter()
+        .map(|ref dir| {
+            loader::load_crate(dir, &cargo_conf)
+                .expect(&format!("fail to load crate from {}", dir.to_str().unwrap()))
+        })
+        .flat_map(|(ref pkg, ref deps)| {
+            loader::find_targets(pkg, deps).expect(&format!("fail to find targets from {}", pkg))
+        })
+        .collect()));
 
     let rx = app_conf.start_parsers(targets);
 

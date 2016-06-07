@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use cargo::core::{Package, PackageSet};
+use cargo::core::{Package, PackageSet, Target};
 use cargo::ops::resolve_dependencies;
 use cargo::util::Config;
 
@@ -26,4 +26,31 @@ pub fn load_crate<'a>(dir: &Path, conf: &'a Config) -> Result<(Package, PackageS
     };
 
     Ok((root_package, packages))
+}
+
+pub fn find_targets<'a>(pkg: &Package, deps: &PackageSet<'a>) -> Result<Vec<(PathBuf, Target)>> {
+    let mut targets: Vec<(PathBuf, Target)> =
+        pkg.targets().iter().map(|target| (PathBuf::from(pkg.root()), target.clone())).collect();
+
+    for dep in pkg.dependencies() {
+        debug!("found dependency; name={}, version={}, locked={}",
+               dep.name(),
+               dep.version_req(),
+               dep.specified_req().unwrap_or("N/A"));
+    }
+
+    for pkg_id in deps.package_ids() {
+        let dep = try!(deps.get(pkg_id));
+
+        info!("resolved package; {}, root={}",
+              dep,
+              dep.root().to_str().unwrap());
+
+        targets.extend(dep.targets()
+            .iter()
+            .filter(|target| target.is_lib())
+            .map(|target| (PathBuf::from(dep.root()), target.clone())));
+    }
+
+    Ok(targets)
 }
