@@ -54,13 +54,13 @@ impl AppConf {
 
                             let now = Instant::now();
 
-                            match parser::extract_symbols(task.src_path()) {
+                            match parser::extract_symbols(&task.src_path()) {
                                 Ok(source_files) => {
-                                    debug!("parsed {} target with {} source files in {:.2}ms",
-                                           task.target.name(),
-                                           source_files.len(),
-                                           now.elapsed().as_secs() as f64 * 1000.0 +
-                                           now.elapsed().subsec_nanos() as f64 / 1000.0 / 1000.0);
+                                    info!("parsed `{}` target with {} source files in {:.2}ms",
+                                          task.target.name(),
+                                          source_files.len(),
+                                          now.elapsed().as_secs() as f64 * 1000.0 +
+                                          now.elapsed().subsec_nanos() as f64 / 1000.0 / 1000.0);
 
                                     for source_file in source_files {
                                         tx.send(source_file).unwrap();
