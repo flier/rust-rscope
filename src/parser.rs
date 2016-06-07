@@ -90,6 +90,14 @@ impl Symbol {
         })
     }
 
+    fn define_global(item: &ast::Item, _: &ast::Ty) -> Symbol {
+        Symbol {
+            token: Token::GlobalDef,
+            name: item.ident.name.as_str().to_string(),
+            span: item.span,
+        }
+    }
+
     fn define_enum(item: &ast::Item, definition: &ast::EnumDef) -> Vec<Symbol> {
         let mut symbols = vec![Symbol {
                                    token: Token::EnumDef,
@@ -244,6 +252,17 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                 };
 
                 self.symbols.append(&mut symbols);
+            }
+
+            ast::ItemKind::Static(ref typ, _, ref expr) |
+            ast::ItemKind::Const(ref typ, ref expr) => {
+                trace!("define static/const `{}` : {:?}  = {:?} @ {}",
+                       item.ident.name.as_str(),
+                       typ,
+                       expr,
+                       self.code_span(item.span));
+
+                self.symbols.push(Symbol::define_global(item, typ));
             }
 
             ast::ItemKind::Enum(ref enum_definition, _) => {
