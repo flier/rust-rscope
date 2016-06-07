@@ -4,9 +4,9 @@ extern crate env_logger;
 extern crate getopts;
 extern crate num_cpus;
 extern crate cargo;
+extern crate syntex_syntax;
 
 use std::env;
-use std::cmp;
 use std::process;
 use std::thread;
 use std::sync::mpsc;
@@ -23,71 +23,6 @@ mod gen;
 
 use errors::Result;
 
-#[derive(PartialEq, Eq, PartialOrd)]
-#[repr(u8)]
-enum Symbol {
-    /// non-symbol text
-    Nop,
-    /// function definition
-    FuncDef = b'$',
-    /// function call
-    FuncCall = b'`',
-    /// function end
-    FuncEnd = b'}',
-    /// #define
-    Define = b'#',
-    /// #define end
-    DefineEnd = b')',
-    /// #include
-    Include = b'~',
-    /// direct assignment, increment, or decrement
-    Assignment = b'=',
-    /// enum/struct/union definition end
-    DeclEnd = b';',
-    /// class definition
-    ClassDef = b'c',
-    /// enum definition
-    EnumDef = b'e',
-    /// other global definition
-    GlobalDef = b'g',
-    /// function/block local definition
-    LocalDef = b'l',
-    /// global enum/struct/union member definition
-    GlobalDecl = b'm',
-    /// function parameter definition
-    FuncParam = b'p',
-    /// struct definition
-    StructDef = b's',
-    /// typedef definition
-    Typedef = b't',
-    /// union definition
-    UnionDef = b'u',
-}
-
-#[derive(PartialEq, Eq, PartialOrd)]
-struct SourceLine {
-    line_num: usize,
-    symbols: Vec<Symbol>,
-}
-
-impl cmp::Ord for SourceLine {
-    fn cmp(&self, other: &Self) -> cmp::Ordering {
-        self.line_num.cmp(&other.line_num)
-    }
-}
-
-#[derive(PartialEq, Eq, PartialOrd)]
-struct SourceFile {
-    path: PathBuf,
-    lines: Vec<SourceLine>,
-}
-
-impl cmp::Ord for SourceFile {
-    fn cmp(&self, other: &Self) -> cmp::Ordering {
-        self.path.cmp(&other.path)
-    }
-}
-
 #[derive(Debug)]
 struct AppConf {
     jobs: usize,
@@ -95,17 +30,15 @@ struct AppConf {
 }
 
 impl AppConf {
-    fn load_targets(&self, cargo_conf: &Config) -> Vec<Target> {
+    fn load_targets(&self, cargo_conf: &Config) -> Result<Vec<(PathBuf, Target)>> {
         let mut targets = Vec::new();
 
         for dir in &self.dirs {
-            let mut p = PathBuf::from(dir);
+            let (package, packages) = try!(loader::load_crate(&dir, cargo_conf));
 
-            p.push("Cargo.toml");
-
-            let (package, packages) = loader::load(&p, cargo_conf).unwrap();
-
-            targets.append(&mut Vec::from(package.targets()));
+            targets.extend(package.targets()
+                .iter()
+                .map(|target| (PathBuf::from(package.root()), target.clone())));
 
             for dep in package.dependencies() {
                 debug!("found dependency; name={}, version={}, locked={}",
@@ -114,25 +47,27 @@ impl AppConf {
                        dep.specified_req().unwrap_or("N/A"));
             }
 
-            for pkg in packages.package_ids() {
-                let pkg = packages.get(pkg).unwrap();
+            for package_id in packages.package_ids() {
+                let package = try!(packages.get(package_id));
 
                 info!("resolved package; {}, root={}",
-                      pkg,
-                      pkg.root().to_str().unwrap());
+                      package,
+                      package.root().to_str().unwrap());
 
-                for target in pkg.targets() {
+                for target in package.targets() {
                     if target.is_lib() {
-                        targets.push(target.clone())
+                        targets.push((PathBuf::from(package.root()), target.clone()))
                     }
                 }
             }
         }
 
-        targets
+        Ok(targets)
     }
 
-    fn start_parsers(&self, targets: Arc<Mutex<Vec<Target>>>) -> mpsc::Receiver<SourceFile> {
+    fn start_parsers(&self,
+                     targets: Arc<Mutex<Vec<(PathBuf, Target)>>>)
+                     -> mpsc::Receiver<parser::SourceFile> {
         let (tx, rx) = mpsc::channel();
 
         for i in 0..self.jobs {
@@ -143,8 +78,12 @@ impl AppConf {
                 .name(format!("parser-{}", i))
                 .spawn(move || {
                     loop {
-                        if let Some(target) = targets.lock().unwrap().pop() {
-                            debug!("loading target; name={}, kind={}, src_path={}",
+                        if let Some((ref base_dir, ref target)) = match targets.lock() {
+                                Ok(guard) => guard,
+                                Err(poisoned) => poisoned.into_inner(),
+                            }
+                            .pop() {
+                            debug!("parsing target; name={}, kind={}, src_path={}",
                                    target.name(),
                                    match *target.kind() {
                                        TargetKind::Lib(_) => "lib",
@@ -156,15 +95,16 @@ impl AppConf {
                                    },
                                    target.src_path().to_str().unwrap());
 
-                            let mut lines = Vec::new();
-
-                            lines.sort();
-
-                            tx.send(SourceFile {
-                                    path: PathBuf::from(target.src_path()),
-                                    lines: lines,
-                                })
-                                .unwrap()
+                            match parser::extract_symbols(base_dir, target) {
+                                Ok(source_files) => {
+                                    for source_file in source_files {
+                                        tx.send(source_file).unwrap();
+                                    }
+                                }
+                                Err(err) => {
+                                    warn!("parse target failed, {}", err);
+                                }
+                            }
                         } else {
                             break;
                         }
@@ -247,11 +187,12 @@ fn main() {
 
     let cargo_conf = Config::default().expect("fail to initial cargo");
 
-    let targets = Arc::new(Mutex::new(app_conf.load_targets(&cargo_conf)));
+    let targets = Arc::new(Mutex::new(app_conf.load_targets(&cargo_conf)
+        .expect("fail to load targets")));
 
     let rx = app_conf.start_parsers(targets);
 
-    let mut files: Vec<SourceFile> = rx.iter().collect();
+    let mut files: Vec<parser::SourceFile> = rx.iter().collect();
 
     files.sort();
 

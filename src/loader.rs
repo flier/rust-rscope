@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cargo::core::{Package, PackageSet};
 use cargo::ops::resolve_dependencies;
@@ -6,8 +6,12 @@ use cargo::util::Config;
 
 use errors::Result;
 
-pub fn load<'a>(manifest_path: &Path, conf: &'a Config) -> Result<(Package, PackageSet<'a>)> {
-    debug!("loading; manifest-path={}", manifest_path.display());
+pub fn load_crate<'a>(dir: &Path, conf: &'a Config) -> Result<(Package, PackageSet<'a>)> {
+    let mut manifest_path = PathBuf::from(dir);
+
+    manifest_path.push("Cargo.toml");
+
+    debug!("loading crate; manifest-path={}", manifest_path.display());
 
     let root_package = try!(Package::for_path(&manifest_path, conf));
 
@@ -17,7 +21,7 @@ pub fn load<'a>(manifest_path: &Path, conf: &'a Config) -> Result<(Package, Pack
         warn!("{}", key)
     }
 
-    let (packages, resolve_with_overrides) = {
+    let (packages, _) = {
         try!(resolve_dependencies(&root_package, conf, None, Vec::new(), true))
     };
 
