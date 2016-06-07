@@ -70,7 +70,7 @@ impl cmp::Ord for SourceFile {
     }
 }
 
-pub fn extract_symbols(src_path: &PathBuf) -> Result<Vec<SourceFile>> {
+pub fn extract_symbols(src_path: PathBuf) -> Result<Vec<SourceFile>> {
     let cfg = Vec::new();
     let sess = parse::ParseSess::new();
 

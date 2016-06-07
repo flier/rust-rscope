@@ -32,7 +32,7 @@ struct AppConf {
 
 impl AppConf {
     fn start_parsers(&self,
-                     targets: Arc<Mutex<Vec<(PathBuf, Target)>>>)
+                     targets: Arc<Mutex<Vec<loader::Task>>>)
                      -> mpsc::Receiver<parser::SourceFile> {
         let (tx, rx) = mpsc::channel();
 
@@ -44,19 +44,17 @@ impl AppConf {
                 .name(format!("parser-{}", i))
                 .spawn(move || {
                     loop {
-                        let task = {
+                        if let Some(ref task) = {
                             match targets.lock() {
                                     Ok(guard) => guard,
                                     Err(poisoned) => poisoned.into_inner(),
                                 }
                                 .pop()
-                        };
-
-                        if let Some((ref base_dir, ref target)) = task {
+                        } {
                             let now = Instant::now();
                             debug!("parsing target; name={}, kind={}, src_path={}",
-                                   target.name(),
-                                   match *target.kind() {
+                                   task.target.name(),
+                                   match *task.target.kind() {
                                        TargetKind::Lib(_) => "lib",
                                        TargetKind::CustomBuild => "build",
                                        TargetKind::Bench => "bench",
@@ -64,22 +62,12 @@ impl AppConf {
                                        TargetKind::Example => "example",
                                        TargetKind::Bin => "bin",
                                    },
-                                   target.src_path().to_str().unwrap());
+                                   task.target.src_path().to_str().unwrap());
 
-                            let src_path = if target.src_path().is_absolute() {
-                                PathBuf::from(target.src_path())
-                            } else {
-                                let mut p = base_dir.clone();
-
-                                p.push(target.src_path());
-
-                                p
-                            };
-
-                            match parser::extract_symbols(&src_path) {
+                            match parser::extract_symbols(task.src_path()) {
                                 Ok(source_files) => {
                                     debug!("parsed {} target with {} source files in {:.2}ms",
-                                           target.name(),
+                                           task.target.name(),
                                            source_files.len(),
                                            now.elapsed().as_secs() as f64 * 1000.0 +
                                            now.elapsed().subsec_nanos() as f64 / 1000.0 / 1000.0);

@@ -6,6 +6,26 @@ use cargo::util::Config;
 
 use errors::Result;
 
+pub struct Task {
+    pub base_dir: PathBuf,
+    pub target: Target,
+    pub is_dep: bool,
+}
+
+impl Task {
+    pub fn src_path(&self) -> PathBuf {
+        if self.target.src_path().is_absolute() {
+            PathBuf::from(self.target.src_path())
+        } else {
+            let mut p = self.base_dir.clone();
+
+            p.push(self.target.src_path());
+
+            p
+        }
+    }
+}
+
 pub fn load_crate<'a>(dir: &Path, conf: &'a Config) -> Result<(Package, PackageSet<'a>)> {
     let mut manifest_path = PathBuf::from(dir);
 
@@ -28,9 +48,17 @@ pub fn load_crate<'a>(dir: &Path, conf: &'a Config) -> Result<(Package, PackageS
     Ok((root_package, packages))
 }
 
-pub fn find_targets<'a>(pkg: &Package, deps: &PackageSet<'a>) -> Result<Vec<(PathBuf, Target)>> {
-    let mut targets: Vec<(PathBuf, Target)> =
-        pkg.targets().iter().map(|target| (PathBuf::from(pkg.root()), target.clone())).collect();
+pub fn find_targets<'a>(pkg: &Package, deps: &PackageSet<'a>) -> Result<Vec<Task>> {
+    let mut targets: Vec<Task> = pkg.targets()
+        .iter()
+        .map(|target| {
+            Task {
+                base_dir: PathBuf::from(pkg.root()),
+                target: target.clone(),
+                is_dep: false,
+            }
+        })
+        .collect();
 
     for dep in pkg.dependencies() {
         debug!("found dependency; name={}, version={}, locked={}",
@@ -49,7 +77,13 @@ pub fn find_targets<'a>(pkg: &Package, deps: &PackageSet<'a>) -> Result<Vec<(Pat
         targets.extend(dep.targets()
             .iter()
             .filter(|target| target.is_lib())
-            .map(|target| (PathBuf::from(dep.root()), target.clone())));
+            .map(|target| {
+                Task {
+                    base_dir: PathBuf::from(dep.root()),
+                    target: target.clone(),
+                    is_dep: true,
+                }
+            }));
     }
 
     Ok(targets)
