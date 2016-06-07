@@ -38,7 +38,7 @@ pub enum Token {
     /// function/block local definition
     LocalDef = b'l',
     /// global enum/struct/union member definition
-    GlobalDecl = b'm',
+    MemberDecl = b'm',
     /// function parameter definition
     FuncParam = b'p',
     /// struct definition
@@ -99,7 +99,7 @@ impl Symbol {
 
         symbols.extend(definition.variants.iter().map(|var| {
             Symbol {
-                token: Token::Ident,
+                token: Token::MemberDecl,
                 name: var.node.name.to_string(),
                 span: var.span,
             }
@@ -119,7 +119,7 @@ impl Symbol {
             symbols.extend(fields.iter().filter_map(|ref field| {
                 field.ident.map(|ident| {
                     Symbol {
-                        token: Token::Ident,
+                        token: Token::MemberDecl,
                         name: ident.name.as_str().to_string(),
                         span: field.span,
                     }
