@@ -83,9 +83,6 @@ pub fn extract_symbols(base_dir: &PathBuf, target: &Target) -> Result<Vec<Source
         p
     };
 
-    debug!("parsing crate target; src-path={}",
-           src_path.to_str().unwrap());
-
     let cfg = Vec::new();
     let sess = parse::ParseSess::new();
 

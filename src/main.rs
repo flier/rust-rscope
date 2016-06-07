@@ -11,6 +11,7 @@ use std::process;
 use std::thread;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use std::path::{Path, PathBuf};
 
 use cargo::util::Config;
@@ -43,11 +44,16 @@ impl AppConf {
                 .name(format!("parser-{}", i))
                 .spawn(move || {
                     loop {
-                        if let Some((ref base_dir, ref target)) = match targets.lock() {
-                                Ok(guard) => guard,
-                                Err(poisoned) => poisoned.into_inner(),
-                            }
-                            .pop() {
+                        let task = {
+                            match targets.lock() {
+                                    Ok(guard) => guard,
+                                    Err(poisoned) => poisoned.into_inner(),
+                                }
+                                .pop()
+                        };
+
+                        if let Some((ref base_dir, ref target)) = task {
+                            let now = Instant::now();
                             debug!("parsing target; name={}, kind={}, src_path={}",
                                    target.name(),
                                    match *target.kind() {
@@ -62,6 +68,12 @@ impl AppConf {
 
                             match parser::extract_symbols(base_dir, target) {
                                 Ok(source_files) => {
+                                    debug!("parsed {} target with {} source files in {:.2}ms",
+                                           target.name(),
+                                           source_files.len(),
+                                           now.elapsed().as_secs() as f64 * 1000.0 +
+                                           now.elapsed().subsec_nanos() as f64 / 1000.0 / 1000.0);
+
                                     for source_file in source_files {
                                         tx.send(source_file).unwrap();
                                     }
