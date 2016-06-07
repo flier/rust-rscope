@@ -66,7 +66,17 @@ impl AppConf {
                                    },
                                    target.src_path().to_str().unwrap());
 
-                            match parser::extract_symbols(base_dir, target) {
+                            let src_path = if target.src_path().is_absolute() {
+                                PathBuf::from(target.src_path())
+                            } else {
+                                let mut p = base_dir.clone();
+
+                                p.push(target.src_path());
+
+                                p
+                            };
+
+                            match parser::extract_symbols(&src_path) {
                                 Ok(source_files) => {
                                     debug!("parsed {} target with {} source files in {:.2}ms",
                                            target.name(),

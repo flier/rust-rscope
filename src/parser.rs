@@ -1,8 +1,6 @@
 use std::cmp;
 use std::path::PathBuf;
 
-use cargo::core::Target;
-
 use syntex_syntax::parse;
 
 use errors::Result;
@@ -72,17 +70,7 @@ impl cmp::Ord for SourceFile {
     }
 }
 
-pub fn extract_symbols(base_dir: &PathBuf, target: &Target) -> Result<Vec<SourceFile>> {
-    let src_path = if target.src_path().is_absolute() {
-        PathBuf::from(target.src_path())
-    } else {
-        let mut p = base_dir.clone();
-
-        p.push(target.src_path());
-
-        p
-    };
-
+pub fn extract_symbols(src_path: &PathBuf) -> Result<Vec<SourceFile>> {
     let cfg = Vec::new();
     let sess = parse::ParseSess::new();
 
