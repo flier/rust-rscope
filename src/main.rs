@@ -15,7 +15,6 @@ use std::time::Instant;
 use std::path::{Path, PathBuf};
 
 use cargo::util::Config;
-use cargo::core::{Target, TargetKind};
 
 mod errors;
 mod loader;
@@ -51,18 +50,9 @@ impl AppConf {
                                 }
                                 .pop()
                         } {
+                            debug!("parsing {:?}", task);
+
                             let now = Instant::now();
-                            debug!("parsing target; name={}, kind={}, src_path={}",
-                                   task.target.name(),
-                                   match *task.target.kind() {
-                                       TargetKind::Lib(_) => "lib",
-                                       TargetKind::CustomBuild => "build",
-                                       TargetKind::Bench => "bench",
-                                       TargetKind::Test => "test",
-                                       TargetKind::Example => "example",
-                                       TargetKind::Bin => "bin",
-                                   },
-                                   task.target.src_path().to_str().unwrap());
 
                             match parser::extract_symbols(task.src_path()) {
                                 Ok(source_files) => {

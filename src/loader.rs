@@ -1,6 +1,7 @@
+use std::fmt;
 use std::path::{Path, PathBuf};
 
-use cargo::core::{Package, PackageSet, Target};
+use cargo::core::{Package, PackageSet, Target, TargetKind};
 use cargo::ops::resolve_dependencies;
 use cargo::util::Config;
 
@@ -10,6 +11,23 @@ pub struct Task {
     pub base_dir: PathBuf,
     pub target: Target,
     pub is_dep: bool,
+}
+
+impl fmt::Debug for Task {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f,
+               "task name={}, kind={}, src_path={}",
+               self.target.name(),
+               match *self.target.kind() {
+                   TargetKind::Lib(_) => "lib",
+                   TargetKind::CustomBuild => "build",
+                   TargetKind::Bench => "bench",
+                   TargetKind::Test => "test",
+                   TargetKind::Example => "example",
+                   TargetKind::Bin => "bin",
+               },
+               self.target.src_path().to_str().unwrap())
+    }
 }
 
 impl Task {
