@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 
 use syntex_syntax::parse;
 use syntex_syntax::visit;
-use syntex_syntax::codemap;
 use syntex_syntax::ast;
+use syntex_syntax::codemap::Span;
+use syntex_syntax::parse::token::keywords;
 
 use errors::Result;
 
@@ -53,7 +54,7 @@ pub enum Token {
 pub struct Symbol {
     pub token: Token,
     pub name: String,
-    pub span: codemap::Span,
+    pub span: Span,
 }
 
 impl Symbol {
@@ -96,6 +97,62 @@ impl Symbol {
             name: item.ident.name.as_str().to_string(),
             span: item.span,
         }
+    }
+
+    fn declare_func(ident: ast::Ident, span: Span, func_decl: &ast::FnDecl) -> Vec<Symbol> {
+        let mut symbols = vec![Symbol {
+                                   token: Token::FuncDef,
+                                   name: ident.name.to_string(),
+                                   span: span,
+                               }];
+
+        symbols.extend(func_decl.inputs.iter().filter_map(|arg| {
+            match arg.pat.node {
+                ast::PatKind::Ident(_, ident, _) if ident.node.name !=
+                                                    keywords::SelfValue.name() => {
+                    Some(Symbol {
+                        token: Token::FuncParam,
+                        name: ident.node.name.to_string(),
+                        span: arg.pat.span,
+                    })
+                }
+                _ => None,
+            }
+        }));
+
+        symbols
+    }
+
+    fn define_trait(item: &ast::Item, trait_definition: &Vec<ast::TraitItem>) -> Vec<Symbol> {
+        let mut symbols = vec![Symbol {
+                                   token: Token::ClassDef,
+                                   name: item.ident.name.as_str().to_string(),
+                                   span: item.span,
+                               }];
+
+        symbols.extend(trait_definition.iter().flat_map(|ref item| {
+            match item.node {
+                ast::TraitItemKind::Const(ref typ, _) => {
+                    vec![Symbol {
+                             token: Token::MemberDecl,
+                             name: item.ident.name.to_string(),
+                             span: item.span,
+                         }]
+                }
+                ast::TraitItemKind::Method(ref method, _) => {
+                    Self::declare_func(item.ident, item.span, &method.decl)
+                }
+                ast::TraitItemKind::Type(_, _) => {
+                    vec![Symbol {
+                             token: Token::Typedef,
+                             name: item.ident.name.to_string(),
+                             span: item.span,
+                         }]
+                }
+            }
+        }));
+
+        symbols
     }
 
     fn define_enum(item: &ast::Item, definition: &ast::EnumDef) -> Vec<Symbol> {
@@ -197,17 +254,19 @@ pub struct SourceFileVisitor {
 }
 
 impl SourceFileVisitor {
-    fn code_span(&self, span: codemap::Span) -> String {
+    fn code_span(&self, span: Span) -> String {
         self.session.codemap().span_to_string(span)
     }
 }
 
 impl<'a> visit::Visitor<'a> for SourceFileVisitor {
     fn visit_item(&mut self, item: &'a ast::Item) {
+        let name = item.ident.name.as_str();
+
         match item.node {
             ast::ItemKind::ExternCrate(opt_name) => {
                 trace!("import crate `{}`{} @ {}",
-                       item.ident.name.as_str(),
+                       name,
                        if let Some(ref as_name) = opt_name {
                            format!(" as {}", as_name)
                        } else {
@@ -215,7 +274,9 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                        },
                        self.code_span(item.span));
 
-                self.symbols.push(Symbol::import_crate(item))
+                let symbol = Symbol::import_crate(item);
+
+                self.symbols.push(symbol);
             }
 
             ast::ItemKind::Use(ref vp) => {
@@ -257,39 +318,58 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
             ast::ItemKind::Static(ref typ, _, ref expr) |
             ast::ItemKind::Const(ref typ, ref expr) => {
                 trace!("define static/const `{}` : {:?}  = {:?} @ {}",
-                       item.ident.name.as_str(),
+                       name,
                        typ,
                        expr,
                        self.code_span(item.span));
 
-                self.symbols.push(Symbol::define_global(item, typ));
+                let symbol = Symbol::define_global(item, typ);
+
+                self.symbols.push(symbol);
+            }
+
+            ast::ItemKind::Trait(_, _, _, ref trait_definition) => {
+                debug!("define trait `{}` with {} items @ {}",
+                       name,
+                       trait_definition.len(),
+                       self.code_span(item.span));
+
+                let mut symbols = Symbol::define_trait(item, trait_definition);
+
+                self.symbols.append(&mut symbols);
             }
 
             ast::ItemKind::Enum(ref enum_definition, _) => {
                 trace!("define enum `{}` with {} values @ {}",
-                       item.ident.name.as_str(),
+                       name,
                        enum_definition.variants.len(),
                        self.code_span(item.span));
 
-                self.symbols.append(&mut Symbol::define_enum(item, enum_definition));
+                let mut symbols = Symbol::define_enum(item, enum_definition);
+
+                self.symbols.append(&mut symbols);
             }
 
             ast::ItemKind::Struct(ref struct_definition, _) => {
                 trace!("define struct `{}` with {} fields @ {}",
-                       item.ident.name.as_str(),
+                       name,
                        struct_definition.fields().len(),
                        self.code_span(item.span));
 
-                self.symbols.append(&mut Symbol::define_struct(item, struct_definition));
+                let mut symbols = Symbol::define_struct(item, struct_definition);
+
+                self.symbols.append(&mut symbols);
             }
 
             ast::ItemKind::Ty(ref typ, _) => {
                 trace!("declare typedef `{}` = {:?} @ {}",
-                       item.ident.name.as_str(),
+                       name,
                        typ,
                        self.code_span(item.span));
 
-                self.symbols.push(Symbol::declare_typedef(item, typ));
+                let symbol = Symbol::declare_typedef(item, typ);
+
+                self.symbols.push(symbol);
             }
 
             _ => visit::walk_item(self, item),
