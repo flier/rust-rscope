@@ -5,6 +5,7 @@ use syntex_syntax::parse;
 use syntex_syntax::visit;
 use syntex_syntax::ast;
 use syntex_syntax::codemap::Span;
+use syntex_syntax::print::pprust;
 use syntex_syntax::parse::token::keywords;
 
 use errors::Result;
@@ -99,10 +100,10 @@ impl Symbol {
         }
     }
 
-    fn declare_func(ident: ast::Ident, span: Span, func_decl: &ast::FnDecl) -> Vec<Symbol> {
+    fn declare_func(name: Option<ast::Name>, span: Span, func_decl: &ast::FnDecl) -> Vec<Symbol> {
         let mut symbols = vec![Symbol {
                                    token: Token::FuncDef,
-                                   name: ident.name.to_string(),
+                                   name: name.map_or_else(|| "".to_string(), |s| s.to_string()),
                                    span: span,
                                }];
 
@@ -132,15 +133,12 @@ impl Symbol {
 
         symbols.extend(trait_definition.iter().flat_map(|ref item| {
             match item.node {
-                ast::TraitItemKind::Const(ref typ, _) => {
+                ast::TraitItemKind::Const(_, _) => {
                     vec![Symbol {
                              token: Token::MemberDecl,
                              name: item.ident.name.to_string(),
                              span: item.span,
                          }]
-                }
-                ast::TraitItemKind::Method(ref method, _) => {
-                    Self::declare_func(item.ident, item.span, &method.decl)
                 }
                 ast::TraitItemKind::Type(_, _) => {
                     vec![Symbol {
@@ -149,6 +147,7 @@ impl Symbol {
                              span: item.span,
                          }]
                 }
+                ast::TraitItemKind::Method(_, _) => Vec::new(),
             }
         }));
 
@@ -173,24 +172,20 @@ impl Symbol {
         symbols
     }
 
-    fn define_struct(item: &ast::Item, definition: &ast::VariantData) -> Vec<Symbol> {
+    fn define_struct(ident: ast::SpannedIdent, fields: &Vec<ast::SpannedIdent>) -> Vec<Symbol> {
         let mut symbols = vec![Symbol {
                                    token: Token::StructDef,
-                                   name: item.ident.name.as_str().to_string(),
-                                   span: item.span,
+                                   name: ident.node.name.as_str().to_string(),
+                                   span: ident.span,
                                }];
 
-        if let &ast::VariantData::Struct(ref fields, _) = definition {
-            symbols.extend(fields.iter().filter_map(|ref field| {
-                field.ident.map(|ident| {
-                    Symbol {
-                        token: Token::MemberDecl,
-                        name: ident.name.as_str().to_string(),
-                        span: field.span,
-                    }
-                })
-            }));
-        }
+        symbols.extend(fields.iter().map(|ref field| {
+            Symbol {
+                token: Token::MemberDecl,
+                name: field.node.name.as_str().to_string(),
+                span: field.span,
+            }
+        }));
 
         symbols
     }
@@ -203,11 +198,27 @@ impl Symbol {
         }
     }
 
+    fn define_macro(mac: &ast::MacroDef) -> Symbol {
+        Symbol {
+            token: Token::Define,
+            name: mac.ident.name.as_str().to_string(),
+            span: mac.span,
+        }
+    }
+
     fn use_macro(mac: &ast::Mac) -> Symbol {
         Symbol {
             token: Token::Ident,
             name: mac.node.path.to_string(),
             span: mac.span,
+        }
+    }
+
+    fn call_func(name: &str, span: Span) -> Symbol {
+        Symbol {
+            token: Token::FuncCall,
+            name: name.to_string(),
+            span: span,
         }
     }
 }
@@ -279,6 +290,20 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                 self.symbols.push(symbol);
             }
 
+            ast::ItemKind::Mod(ref module) => {
+                debug!("import module `{}` with {} items @ {}",
+                       name,
+                       module.items.len(),
+                       self.code_span(item.span));
+            }
+
+            ast::ItemKind::ForeignMod(ref module) => {
+                debug!("extern module `{}` with {} items @ {}",
+                       name,
+                       module.items.len(),
+                       self.code_span(item.span));
+            }
+
             ast::ItemKind::Use(ref vp) => {
                 let mut symbols = match vp.node {
                     ast::ViewPathSimple(ident, ref path) => {
@@ -329,7 +354,7 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
             }
 
             ast::ItemKind::Trait(_, _, _, ref trait_definition) => {
-                debug!("define trait `{}` with {} items @ {}",
+                trace!("define trait `{}` with {} items @ {}",
                        name,
                        trait_definition.len(),
                        self.code_span(item.span));
@@ -356,7 +381,26 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                        struct_definition.fields().len(),
                        self.code_span(item.span));
 
-                let mut symbols = Symbol::define_struct(item, struct_definition);
+                let fields = if let &ast::VariantData::Struct(ref fields, _) = struct_definition {
+                    fields.iter()
+                        .filter_map(|ref field| {
+                            field.ident.map(|ident| {
+                                ast::SpannedIdent {
+                                    node: ident,
+                                    span: field.span,
+                                }
+                            })
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                let mut symbols = Symbol::define_struct(ast::SpannedIdent {
+                                                            node: item.ident,
+                                                            span: item.span,
+                                                        },
+                                                        &fields);
 
                 self.symbols.append(&mut symbols);
             }
@@ -372,16 +416,98 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                 self.symbols.push(symbol);
             }
 
-            _ => visit::walk_item(self, item),
+            _ => {}
         }
+
+        visit::walk_item(self, item)
+    }
+
+    fn visit_fn(&mut self,
+                kind: visit::FnKind,
+                decl: &ast::FnDecl,
+                block: &ast::Block,
+                span: Span,
+                _: ast::NodeId) {
+        let mut symbols = match kind {
+            /// fn foo() or extern "Abi" fn foo()
+            visit::FnKind::ItemFn(ref ident, _, _, _, _, _) => {
+                trace!("declare function `{}` @ {}",
+                       ident.name.as_str(),
+                       self.code_span(span));
+
+                Symbol::declare_func(Some(ident.name), span, decl)
+            }
+
+            /// fn foo(&self)
+            visit::FnKind::Method(ref ident, _, _) => {
+                trace!("declare method `{}`(...) @ {}",
+                       ident.name.as_str(),
+                       self.code_span(span));
+
+                Symbol::declare_func(Some(ident.name), span, decl)
+            }
+
+            /// |x, y| {}
+            visit::FnKind::Closure => {
+                trace!("declare closure @ {}", self.code_span(span));
+
+                Symbol::declare_func(None, span, decl)
+            }
+        };
+
+        self.symbols.append(&mut symbols);
+
+        visit::walk_fn(self, kind, decl, block, span);
+    }
+
+    fn visit_macro_def(&mut self, mac: &ast::MacroDef) {
+        debug!("define macro `{}` @ {}",
+               mac.ident.name.as_str(),
+               self.code_span(mac.span));
+
+        self.symbols.push(Symbol::define_macro(mac));
     }
 
     fn visit_mac(&mut self, mac: &ast::Mac) {
-        trace!("use macro: {} @ {}",
+        trace!("use macro `{}` @ {}",
                mac.node.path,
                self.code_span(mac.span));
 
         self.symbols.push(Symbol::use_macro(mac));
+    }
+
+    fn visit_expr(&mut self, expr: &ast::Expr) {
+        match expr.node {
+            ast::ExprKind::Call(ref callee, ref args) => {
+                let name = pprust::expr_to_string(callee);
+
+                trace!("call function `{}` ({}) @ {}",
+                       name,
+                       args.iter()
+                           .map(|expr| pprust::expr_to_string(expr))
+                           .collect::<Vec<String>>()
+                           .join(", "),
+                       self.code_span(callee.span));
+
+                self.symbols.push(Symbol::call_func(&name, callee.span))
+            }
+            ast::ExprKind::MethodCall(ref ident, _, ref args) => {
+                let name = ident.node.name.as_str();
+
+                trace!("call method `{}` ({}) arguments @ {}",
+                       name,
+                       args.iter()
+                           .map(|expr| pprust::expr_to_string(expr))
+                           .collect::<Vec<String>>()
+                           .join(", "),
+                       self.code_span(ident.span));
+
+                self.symbols.push(Symbol::call_func(&name, ident.span))
+            }
+            _ => {
+                visit::walk_expr(self, expr);
+            }
+        };
     }
 }
 
@@ -395,7 +521,9 @@ pub fn extract_symbols(src_path: &Path) -> Result<Vec<SourceFile>> {
 
     let krate = try!(parse::parse_crate_from_file(&src_path, cfg, &visitor.session));
 
-    debug!("walking crate @ {}", visitor.code_span(krate.span));
+    debug!("walking crate with {} exported macros @ {}",
+           krate.exported_macros.len(),
+           visitor.code_span(krate.span));
 
     visit::walk_crate(&mut visitor, &krate);
 
