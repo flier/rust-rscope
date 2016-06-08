@@ -1,10 +1,12 @@
 use std::cmp;
+use std::iter::Extend;
+use std::string::ToString;
 use std::path::{Path, PathBuf};
 
 use syntex_syntax::parse;
 use syntex_syntax::visit;
-use syntex_syntax::ast;
-use syntex_syntax::codemap::Span;
+use syntex_syntax::ast::{self, Ident, SpannedIdent};
+use syntex_syntax::codemap::{Span, Spanned, spanned, respan};
 use syntex_syntax::print::pprust;
 use syntex_syntax::parse::token::keywords;
 use syntex_syntax::ptr::P;
@@ -52,6 +54,24 @@ pub enum Token {
     UnionDef = b'u',
 }
 
+impl Token {
+    fn with_ident(self, ident: &SpannedIdent) -> Symbol {
+        Symbol {
+            token: self,
+            name: ident.node.name.as_str().to_string(),
+            span: ident.span,
+        }
+    }
+
+    fn with_name<T: ToString>(self, name: &Spanned<T>) -> Symbol {
+        Symbol {
+            token: self,
+            name: name.node.to_string(),
+            span: name.span,
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Debug)]
 pub struct Symbol {
     pub token: Token,
@@ -60,55 +80,41 @@ pub struct Symbol {
 }
 
 impl Symbol {
-    fn import_crate(item: &ast::Item) -> Symbol {
-        Symbol {
-            token: Token::Include,
-            name: item.ident.name.as_str().to_string(),
-            span: item.span,
-        }
+    fn use_ident(ident: &SpannedIdent) -> Symbol {
+        Token::Ident.with_ident(ident)
+    }
+
+    fn import_crate(ident: &SpannedIdent) -> Symbol {
+        Token::Include.with_ident(ident)
     }
 
     fn use_module(path: &ast::Path, items: Option<&Vec<ast::PathListItem>>) -> Vec<Symbol> {
-        items.map_or_else(|| {
-            vec![Symbol {
-                     token: Token::Include,
-                     name: path.to_string(),
-                     span: path.span,
-                 }]
-        },
+        items.map_or_else(|| vec![Token::Include.with_name(&respan(path.span, path.to_string()))],
                           |items| {
             items.iter()
                 .map(|item| {
-                    Symbol {
-                        token: Token::Include,
-                        name: if let Some(ident) = item.node.name() {
-                            format!("{}::{}", path, ident.name.as_str())
-                        } else {
-                            path.to_string()
-                        },
-                        span: item.span,
-                    }
+                    Token::Ident.with_name(&respan(item.span,
+                                                   if let Some(ident) = item.node.name() {
+                                                       format!("{}::{}", path, ident.name.as_str())
+                                                   } else {
+                                                       path.to_string()
+                                                   }))
                 })
                 .collect()
         })
     }
 
     fn declare_func(name: Option<ast::Name>, span: Span, func_decl: &ast::FnDecl) -> Vec<Symbol> {
-        let mut symbols = vec![Symbol {
-                                   token: Token::FuncDef,
-                                   name: name.map_or_else(|| "".to_string(), |s| s.to_string()),
-                                   span: span,
-                               }];
+        let name = name.map_or_else(|| "".to_string(), |s| s.to_string());
+
+        let mut symbols = vec![Token::FuncDef.with_name(&respan(span, &name)),
+                               Token::FuncEnd.with_name(&spanned(span.hi, span.hi, &name))];
 
         symbols.extend(func_decl.inputs.iter().filter_map(|arg| {
             match arg.pat.node {
-                ast::PatKind::Ident(_, ident, _) if ident.node.name !=
-                                                    keywords::SelfValue.name() => {
-                    Some(Symbol {
-                        token: Token::FuncParam,
-                        name: ident.node.name.to_string(),
-                        span: arg.pat.span,
-                    })
+                ast::PatKind::Ident(_, ref ident, _) if ident.node.name !=
+                                                        keywords::SelfValue.name() => {
+                    Some(Token::FuncParam.with_ident(ident))
                 }
                 _ => None,
             }
@@ -117,118 +123,68 @@ impl Symbol {
         symbols
     }
 
-    fn define_trait(item: &ast::Item, trait_definition: &Vec<ast::TraitItem>) -> Vec<Symbol> {
-        let mut symbols = vec![Symbol {
-                                   token: Token::ClassDef,
-                                   name: item.ident.name.as_str().to_string(),
-                                   span: item.span,
-                               }];
+    fn define_trait(ident: &SpannedIdent, trait_definition: &Vec<ast::TraitItem>) -> Vec<Symbol> {
+        let mut symbols = vec![Token::ClassDef.with_ident(ident)];
 
-        symbols.extend(trait_definition.iter().flat_map(|ref item| {
-            match item.node {
-                ast::TraitItemKind::Const(_, _) => {
-                    vec![Symbol {
-                             token: Token::MemberDecl,
-                             name: item.ident.name.to_string(),
-                             span: item.span,
-                         }]
+        symbols.extend(trait_definition.iter()
+            .filter_map(|ref item| {
+                match item.node {
+                    ast::TraitItemKind::Const(_, _) => {
+                        Some(Token::MemberDecl.with_ident(&respan(item.span, item.ident)))
+                    }
+                    ast::TraitItemKind::Type(_, _) => {
+                        Some(Token::Typedef.with_ident(&respan(item.span, item.ident)))
+                    }
+                    ast::TraitItemKind::Method(_, _) => None,
                 }
-                ast::TraitItemKind::Type(_, _) => {
-                    vec![Symbol {
-                             token: Token::Typedef,
-                             name: item.ident.name.to_string(),
-                             span: item.span,
-                         }]
-                }
-                ast::TraitItemKind::Method(_, _) => Vec::new(),
-            }
-        }));
+            }));
 
         symbols
     }
 
-    fn define_enum(item: &ast::Item, definition: &ast::EnumDef) -> Vec<Symbol> {
-        let mut symbols = vec![Symbol {
-                                   token: Token::EnumDef,
-                                   name: item.ident.name.as_str().to_string(),
-                                   span: item.span,
-                               }];
+    fn define_enum(ident: &SpannedIdent, definition: &ast::EnumDef) -> Vec<Symbol> {
+        let mut symbols = vec![Token::EnumDef.with_ident(ident),
+                 Token::DeclEnd.with_ident(&spanned(ident.span.hi, ident.span.hi, ident.node))];
 
-        symbols.extend(definition.variants.iter().map(|var| {
-            Symbol {
-                token: Token::MemberDecl,
-                name: var.node.name.to_string(),
-                span: var.span,
-            }
-        }));
+        symbols.extend(definition.variants
+            .iter()
+            .map(|var| Token::MemberDecl.with_ident(&respan(var.span, var.node.name))));
 
         symbols
     }
 
-    fn define_struct(ident: ast::SpannedIdent, fields: &Vec<ast::SpannedIdent>) -> Vec<Symbol> {
-        let mut symbols = vec![Symbol {
-                                   token: Token::StructDef,
-                                   name: ident.node.name.as_str().to_string(),
-                                   span: ident.span,
-                               }];
+    fn define_struct(ident: &SpannedIdent, fields: &Vec<SpannedIdent>) -> Vec<Symbol> {
+        let mut symbols = vec![Token::StructDef.with_ident(ident),
+                 Token::DeclEnd.with_ident(&spanned(ident.span.hi, ident.span.hi, ident.node))];
 
-        symbols.extend(fields.iter().map(|ref field| {
-            Symbol {
-                token: Token::MemberDecl,
-                name: field.node.name.as_str().to_string(),
-                span: field.span,
-            }
-        }));
+        symbols.extend(fields.iter().map(|ref field| Token::MemberDecl.with_ident(field)));
 
         symbols
     }
 
-    fn declare_typedef(item: &ast::Item, _: &ast::Ty) -> Symbol {
-        Symbol {
-            token: Token::Typedef,
-            name: item.ident.name.to_string(),
-            span: item.span,
-        }
+    fn declare_typedef(ident: &SpannedIdent, _: &ast::Ty) -> Symbol {
+        Token::Typedef.with_ident(ident)
     }
 
-    fn define_global(name: &str, span: Span, _: &P<ast::Ty>) -> Symbol {
-        Symbol {
-            token: Token::GlobalDef,
-            name: name.to_string(),
-            span: span,
-        }
+    fn define_global(ident: &SpannedIdent, _: &P<ast::Ty>) -> Symbol {
+        Token::GlobalDef.with_ident(ident)
     }
 
-    fn define_local(name: &str, span: Span, _: &Option<P<ast::Ty>>) -> Symbol {
-        Symbol {
-            token: Token::LocalDef,
-            name: name.to_string(),
-            span: span,
-        }
+    fn define_local(name: &Spanned<&str>, _: &Option<P<ast::Ty>>) -> Symbol {
+        Token::LocalDef.with_name(name)
     }
 
-    fn define_macro(mac: &ast::MacroDef) -> Symbol {
-        Symbol {
-            token: Token::Define,
-            name: mac.ident.name.as_str().to_string(),
-            span: mac.span,
-        }
+    fn define_macro(mac: &ast::MacroDef) -> Vec<Symbol> {
+        vec![Token::Define.with_ident(&respan(mac.span, mac.ident)),
+             Token::DefineEnd.with_ident(&spanned(mac.span.hi, mac.span.hi, mac.ident))]
     }
 
     fn use_macro(mac: &ast::Mac) -> Symbol {
-        Symbol {
-            token: Token::Ident,
-            name: mac.node.path.to_string(),
-            span: mac.span,
-        }
+        Token::Ident.with_name(&respan(mac.span, &mac.node.path))
     }
 
-    fn call_func(name: &str, span: Span) -> Symbol {
-        Symbol {
-            token: Token::FuncCall,
-            name: name.to_string(),
-            span: span,
-        }
+    fn call_func(name: &Spanned<&str>) -> Symbol {
+        Token::FuncCall.with_name(name)
     }
 }
 
@@ -268,6 +224,14 @@ impl cmp::Ord for SourceFile {
     }
 }
 
+macro_rules! walk_list {
+    ($visitor: expr, $method: ident, $list: expr) => {
+        for elem in $list {
+            $visitor.$method(elem)
+        }
+    };
+}
+
 pub struct SourceFileVisitor {
     session: parse::ParseSess,
     symbols: Vec<Symbol>,
@@ -280,6 +244,10 @@ impl SourceFileVisitor {
 }
 
 impl<'a> visit::Visitor<'a> for SourceFileVisitor {
+    fn visit_ident(&mut self, span: Span, ident: Ident) {
+        self.symbols.push(Symbol::use_ident(&respan(span, ident)));
+    }
+
     fn visit_item(&mut self, item: &'a ast::Item) {
         let name = item.ident.name.as_str();
 
@@ -294,27 +262,31 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                        },
                        self.code_span(item.span));
 
-                let symbol = Symbol::import_crate(item);
+                let symbol = Symbol::import_crate(&respan(item.span, item.ident));
 
                 self.symbols.push(symbol);
             }
 
             ast::ItemKind::Mod(ref module) => {
-                debug!("import module `{}` with {} items @ {}",
+                trace!("import module `{}` with {} items @ {}",
                        name,
                        module.items.len(),
                        self.code_span(item.span));
+
+                self.visit_mod(module, item.span, item.id)
             }
 
             ast::ItemKind::ForeignMod(ref module) => {
-                debug!("extern module `{}` with {} items @ {}",
-                       name,
+                trace!("extern `{:?}` module with {} items @ {}",
+                       module.abi,
                        module.items.len(),
                        self.code_span(item.span));
+
+                walk_list!(self, visit_foreign_item, &module.items);
             }
 
             ast::ItemKind::Use(ref vp) => {
-                let mut symbols = match vp.node {
+                let symbols = match vp.node {
                     ast::ViewPathSimple(ident, ref path) => {
                         trace!("use {}{} @ {}",
                                path,
@@ -346,7 +318,7 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                     }
                 };
 
-                self.symbols.append(&mut symbols);
+                self.symbols.extend(symbols);
             }
 
             ast::ItemKind::Static(ref typ, _, ref expr) |
@@ -357,34 +329,41 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                        expr,
                        self.code_span(item.span));
 
-                let symbol = Symbol::define_global(&item.ident.name.as_str(), item.span, typ);
+                let symbol = Symbol::define_global(&respan(item.span, item.ident), typ);
 
                 self.symbols.push(symbol);
+
+                self.visit_ty(typ);
+                self.visit_expr(expr);
             }
 
-            ast::ItemKind::Trait(_, _, _, ref trait_definition) => {
+            ast::ItemKind::Trait(_, ref generics, ref bounds, ref methods) => {
                 trace!("define trait `{}` with {} items @ {}",
                        name,
-                       trait_definition.len(),
+                       methods.len(),
                        self.code_span(item.span));
 
-                let mut symbols = Symbol::define_trait(item, trait_definition);
+                self.symbols.extend(Symbol::define_trait(&respan(item.span, item.ident), methods));
 
-                self.symbols.append(&mut symbols);
+                self.visit_generics(generics);
+                walk_list!(self, visit_ty_param_bound, bounds);
+                walk_list!(self, visit_trait_item, methods);
             }
 
-            ast::ItemKind::Enum(ref enum_definition, _) => {
+            ast::ItemKind::Enum(ref enum_definition, ref type_parameters) => {
                 trace!("define enum `{}` with {} values @ {}",
                        name,
                        enum_definition.variants.len(),
                        self.code_span(item.span));
 
-                let mut symbols = Symbol::define_enum(item, enum_definition);
+                self.symbols
+                    .extend(Symbol::define_enum(&respan(item.span, item.ident), enum_definition));
 
-                self.symbols.append(&mut symbols);
+                self.visit_generics(type_parameters);
+                self.visit_enum_def(enum_definition, type_parameters, item.id, item.span)
             }
 
-            ast::ItemKind::Struct(ref struct_definition, _) => {
+            ast::ItemKind::Struct(ref struct_definition, ref generics) => {
                 trace!("define struct `{}` with {} fields @ {}",
                        name,
                        struct_definition.fields().len(),
@@ -405,30 +384,32 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                     Vec::new()
                 };
 
-                let mut symbols = Symbol::define_struct(ast::SpannedIdent {
-                                                            node: item.ident,
-                                                            span: item.span,
-                                                        },
-                                                        &fields);
+                self.symbols.extend(Symbol::define_struct(&respan(item.span, item.ident), &fields));
 
-                self.symbols.append(&mut symbols);
+                self.visit_generics(generics);
+                self.visit_variant_data(struct_definition,
+                                        item.ident,
+                                        generics,
+                                        item.id,
+                                        item.span);
             }
 
-            ast::ItemKind::Ty(ref typ, _) => {
+            ast::ItemKind::Ty(ref typ, ref type_parameters) => {
                 trace!("declare typedef `{}` = {:?} @ {}",
                        name,
                        typ,
                        self.code_span(item.span));
 
-                let symbol = Symbol::declare_typedef(item, &**typ);
+                let symbol = Symbol::declare_typedef(&respan(item.span, item.ident), &**typ);
 
                 self.symbols.push(symbol);
+
+                self.visit_ty(typ);
+                self.visit_generics(type_parameters)
             }
 
-            _ => {}
+            _ => visit::walk_item(self, item),
         }
-
-        visit::walk_item(self, item)
     }
 
     fn visit_fn(&mut self,
@@ -437,7 +418,7 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                 block: &ast::Block,
                 span: Span,
                 _: ast::NodeId) {
-        let mut symbols = match kind {
+        let symbols = match kind {
             /// fn foo() or extern "Abi" fn foo()
             visit::FnKind::ItemFn(ref ident, _, _, _, _, _) => {
                 trace!("declare function `{}` @ {}",
@@ -464,17 +445,22 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
             }
         };
 
-        self.symbols.append(&mut symbols);
+        self.symbols.extend(symbols);
 
         visit::walk_fn(self, kind, decl, block, span);
     }
 
-    fn visit_macro_def(&mut self, mac: &ast::MacroDef) {
+    fn visit_macro_def(&mut self, macro_def: &ast::MacroDef) {
         debug!("define macro `{}` @ {}",
-               mac.ident.name.as_str(),
-               self.code_span(mac.span));
+               macro_def.ident.name.as_str(),
+               self.code_span(macro_def.span));
 
-        self.symbols.push(Symbol::define_macro(mac));
+        let symbols = Symbol::define_macro(macro_def);
+
+        self.symbols.extend(symbols);
+
+        visit::walk_opt_ident(self, macro_def.span, macro_def.imported_from);
+        walk_list!(self, visit_attribute, &macro_def.attrs);
     }
 
     fn visit_mac(&mut self, mac: &ast::Mac) {
@@ -492,7 +478,9 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                name,
                self.code_span(local.span));
 
-        self.symbols.push(Symbol::define_local(&name, local.span, &local.ty));
+        self.symbols.push(Symbol::define_local(&respan(local.span, &name), &local.ty));
+
+        visit::walk_local(self, local);
     }
 
     fn visit_expr(&mut self, expr: &ast::Expr) {
@@ -508,7 +496,7 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                            .join(", "),
                        self.code_span(callee.span));
 
-                self.symbols.push(Symbol::call_func(&name, callee.span))
+                self.symbols.push(Symbol::call_func(&respan(callee.span, &name)))
             }
             ast::ExprKind::MethodCall(ref ident, _, ref args) => {
                 let name = ident.node.name.as_str();
@@ -521,12 +509,12 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                            .join(", "),
                        self.code_span(ident.span));
 
-                self.symbols.push(Symbol::call_func(&name, ident.span))
+                self.symbols.push(Symbol::call_func(&respan(ident.span, &name)))
             }
-            _ => {
-                visit::walk_expr(self, expr);
-            }
+            _ => {}
         };
+
+        visit::walk_expr(self, expr);
     }
 }
 
