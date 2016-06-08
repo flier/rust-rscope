@@ -186,6 +186,10 @@ impl Symbol {
     fn call_func(name: &Spanned<&str>) -> Symbol {
         Token::FuncCall.with_name(name)
     }
+
+    fn assign_to(name: &Spanned<&str>) -> Symbol {
+        Token::Assignment.with_name(name)
+    }
 }
 
 #[derive(PartialEq, Eq)]
@@ -498,6 +502,7 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
 
                 self.symbols.push(Symbol::call_func(&respan(callee.span, &name)))
             }
+
             ast::ExprKind::MethodCall(ref ident, _, ref args) => {
                 let name = ident.node.name.as_str();
 
@@ -511,6 +516,16 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
 
                 self.symbols.push(Symbol::call_func(&respan(ident.span, &name)))
             }
+
+            ast::ExprKind::Assign(ref lhs, _) |
+            ast::ExprKind::AssignOp(_, ref lhs, _) => {
+                let name = pprust::expr_to_string(lhs);
+
+                trace!("assign to `{}` @ {}", name, self.code_span(lhs.span));
+
+                self.symbols.push(Symbol::assign_to(&respan(lhs.span, &name)))
+            }
+
             _ => {}
         };
 
