@@ -7,6 +7,7 @@ use syntex_syntax::ast;
 use syntex_syntax::codemap::Span;
 use syntex_syntax::print::pprust;
 use syntex_syntax::parse::token::keywords;
+use syntex_syntax::ptr::P;
 
 use errors::Result;
 
@@ -90,14 +91,6 @@ impl Symbol {
                 })
                 .collect()
         })
-    }
-
-    fn define_global(item: &ast::Item, _: &ast::Ty) -> Symbol {
-        Symbol {
-            token: Token::GlobalDef,
-            name: item.ident.name.as_str().to_string(),
-            span: item.span,
-        }
     }
 
     fn declare_func(name: Option<ast::Name>, span: Span, func_decl: &ast::FnDecl) -> Vec<Symbol> {
@@ -195,6 +188,22 @@ impl Symbol {
             token: Token::Typedef,
             name: item.ident.name.to_string(),
             span: item.span,
+        }
+    }
+
+    fn define_global(name: &str, span: Span, _: &P<ast::Ty>) -> Symbol {
+        Symbol {
+            token: Token::GlobalDef,
+            name: name.to_string(),
+            span: span,
+        }
+    }
+
+    fn define_local(name: &str, span: Span, _: &Option<P<ast::Ty>>) -> Symbol {
+        Symbol {
+            token: Token::LocalDef,
+            name: name.to_string(),
+            span: span,
         }
     }
 
@@ -348,7 +357,7 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                        expr,
                        self.code_span(item.span));
 
-                let symbol = Symbol::define_global(item, typ);
+                let symbol = Symbol::define_global(&item.ident.name.as_str(), item.span, typ);
 
                 self.symbols.push(symbol);
             }
@@ -411,7 +420,7 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                        typ,
                        self.code_span(item.span));
 
-                let symbol = Symbol::declare_typedef(item, typ);
+                let symbol = Symbol::declare_typedef(item, &**typ);
 
                 self.symbols.push(symbol);
             }
@@ -474,6 +483,16 @@ impl<'a> visit::Visitor<'a> for SourceFileVisitor {
                self.code_span(mac.span));
 
         self.symbols.push(Symbol::use_macro(mac));
+    }
+
+    fn visit_local(&mut self, local: &ast::Local) {
+        let name = pprust::pat_to_string(&*local.pat);
+
+        trace!("define local variable `{}` @ {}",
+               name,
+               self.code_span(local.span));
+
+        self.symbols.push(Symbol::define_local(&name, local.span, &local.ty));
     }
 
     fn visit_expr(&mut self, expr: &ast::Expr) {
