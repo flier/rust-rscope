@@ -18,6 +18,7 @@ use cargo::util::Config;
 
 mod errors;
 mod loader;
+mod symbol;
 mod parser;
 mod gen;
 

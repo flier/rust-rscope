@@ -3,7 +3,7 @@ name = "rscope"
 version = "0.1.0"
 authors = ["Flier Lu <flier.lu@gmail.com>"]
 license = "MIT/Apache-2.0"
-description = "Rust parser/generator for cscope"
+description = "Rust cross-reference generator for cscope"
 repository = "https://github.com/flier/rust-rscope"
 
 [dependencies]
