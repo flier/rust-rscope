@@ -6,7 +6,7 @@ use syntex_syntax::codemap::{Span, Spanned, spanned, respan};
 use syntex_syntax::parse::token::keywords;
 use syntex_syntax::ptr::P;
 
-#[derive(PartialEq, Eq, PartialOrd, Debug)]
+#[derive(PartialEq, Eq, PartialOrd, Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum Token {
     /// non-symbol text
@@ -18,15 +18,15 @@ pub enum Token {
     /// function end
     FuncEnd = b'}',
     /// #define
-    Define = b'#',
+    MacroDef = b'#',
     /// #define end
-    DefineEnd = b')',
+    MacroEnd = b')',
     /// #include
     Include = b'~',
     /// direct assignment, increment, or decrement
     Assignment = b'=',
     /// enum/struct/union definition end
-    DeclEnd = b';',
+    DefineEnd = b';',
     /// class definition
     ClassDef = b'c',
     /// enum definition
@@ -36,13 +36,13 @@ pub enum Token {
     /// function/block local definition
     LocalDef = b'l',
     /// global enum/struct/union member definition
-    MemberDecl = b'm',
+    MemberDef = b'm',
     /// function parameter definition
-    FuncParam = b'p',
+    ParamDef = b'p',
     /// struct definition
     StructDef = b's',
     /// typedef definition
-    Typedef = b't',
+    TypedefDef = b't',
     /// union definition
     #[allow(dead_code)]
     UnionDef = b'u',
@@ -111,7 +111,7 @@ impl Symbol {
             match arg.pat.node {
                 ast::PatKind::Ident(_, ref ident, _) if ident.node.name !=
                                                         keywords::SelfValue.name() => {
-                    Some(Token::FuncParam.with_ident(ident))
+                    Some(Token::ParamDef.with_ident(ident))
                 }
                 _ => None,
             }
@@ -129,10 +129,10 @@ impl Symbol {
             .filter_map(|ref item| {
                 match item.node {
                     ast::TraitItemKind::Const(_, _) => {
-                        Some(Token::MemberDecl.with_ident(&respan(item.span, item.ident)))
+                        Some(Token::MemberDef.with_ident(&respan(item.span, item.ident)))
                     }
                     ast::TraitItemKind::Type(_, _) => {
-                        Some(Token::Typedef.with_ident(&respan(item.span, item.ident)))
+                        Some(Token::TypedefDef.with_ident(&respan(item.span, item.ident)))
                     }
                     ast::TraitItemKind::Method(_, _) => None,
                 }
@@ -143,26 +143,26 @@ impl Symbol {
 
     pub fn define_enum(ident: &SpannedIdent, definition: &ast::EnumDef) -> Vec<Symbol> {
         let mut symbols = vec![Token::EnumDef.with_ident(ident),
-                 Token::DeclEnd.with_ident(&spanned(ident.span.hi, ident.span.hi, ident.node))];
+                 Token::DefineEnd.with_ident(&spanned(ident.span.hi, ident.span.hi, ident.node))];
 
         symbols.extend(definition.variants
             .iter()
-            .map(|var| Token::MemberDecl.with_ident(&respan(var.span, var.node.name))));
+            .map(|var| Token::MemberDef.with_ident(&respan(var.span, var.node.name))));
 
         symbols
     }
 
     pub fn define_struct(ident: &SpannedIdent, fields: &Vec<SpannedIdent>) -> Vec<Symbol> {
         let mut symbols = vec![Token::StructDef.with_ident(ident),
-                 Token::DeclEnd.with_ident(&spanned(ident.span.hi, ident.span.hi, ident.node))];
+                 Token::DefineEnd.with_ident(&spanned(ident.span.hi, ident.span.hi, ident.node))];
 
-        symbols.extend(fields.iter().map(|ref field| Token::MemberDecl.with_ident(field)));
+        symbols.extend(fields.iter().map(|ref field| Token::MemberDef.with_ident(field)));
 
         symbols
     }
 
     pub fn declare_typedef(ident: &SpannedIdent, _: &ast::Ty) -> Symbol {
-        Token::Typedef.with_ident(ident)
+        Token::TypedefDef.with_ident(ident)
     }
 
     pub fn define_global(ident: &SpannedIdent, _: &P<ast::Ty>) -> Symbol {
@@ -174,8 +174,8 @@ impl Symbol {
     }
 
     pub fn define_macro(mac: &ast::MacroDef) -> Vec<Symbol> {
-        vec![Token::Define.with_ident(&respan(mac.span, mac.ident)),
-             Token::DefineEnd.with_ident(&spanned(mac.span.hi, mac.span.hi, mac.ident))]
+        vec![Token::MacroDef.with_ident(&respan(mac.span, mac.ident)),
+             Token::MacroEnd.with_ident(&spanned(mac.span.hi, mac.span.hi, mac.ident))]
     }
 
     pub fn use_macro(mac: &ast::Mac) -> Symbol {

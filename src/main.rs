@@ -3,6 +3,8 @@ extern crate log;
 extern crate env_logger;
 extern crate getopts;
 extern crate num_cpus;
+#[macro_use]
+extern crate nom;
 extern crate cargo;
 extern crate syntex_syntax;
 
@@ -20,6 +22,7 @@ mod errors;
 mod loader;
 mod symbol;
 mod parser;
+mod crossref;
 mod gen;
 
 use errors::Result;
