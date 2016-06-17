@@ -1,3 +1,4 @@
+use std::fmt;
 use std::iter::Extend;
 use std::string::ToString;
 
@@ -10,7 +11,7 @@ use syntex_syntax::ptr::P;
 #[repr(u8)]
 pub enum Token {
     /// non-symbol text
-    Ident = b' ',
+    Ident,
     /// function definition
     FuncDef = b'$',
     /// function call
@@ -46,6 +47,15 @@ pub enum Token {
     /// union definition
     #[allow(dead_code)]
     UnionDef = b'u',
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Token::Ident => Ok(()),
+            _ => write!(f, "{}", *self as u8 as char),
+        }
+    }
 }
 
 impl Token {
