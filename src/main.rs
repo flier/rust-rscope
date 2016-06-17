@@ -24,6 +24,7 @@ mod errors;
 mod loader;
 mod symbol;
 mod parser;
+mod digraph;
 mod crossref;
 mod gen;
 
