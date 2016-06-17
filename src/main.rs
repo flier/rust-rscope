@@ -3,6 +3,7 @@ extern crate log;
 extern crate env_logger;
 extern crate getopts;
 extern crate num_cpus;
+extern crate memmap;
 #[macro_use]
 extern crate nom;
 extern crate cargo;
@@ -18,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use cargo::util::Config;
 
+#[macro_use]
 mod errors;
 mod loader;
 mod symbol;

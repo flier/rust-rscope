@@ -1,6 +1,6 @@
 use std::str::{self, FromStr};
 
-use nom::{digit, space, tab, newline};
+use nom::{IResult, digit, space, tab, newline};
 
 use symbol::Token;
 
@@ -189,6 +189,20 @@ named!(pub source_file<SourceFile>,
         }
     )
 );
+
+pub fn parse<'a>(buf: &'a [u8]) -> IResult<&'a [u8], CrossRef<'a>> {
+    let (rest, header) = try_parse!(buf, header);
+    let (symbols_buf, trailer_buf) = rest.split_at(header.trailer_off);
+    let (rest, trailer) = try_parse!(trailer_buf, trailer);
+    let (_, files) = try_parse!(symbols_buf, many_m_n!(0, trailer.src_files.len(), source_file));
+
+    IResult::Done(rest,
+                  CrossRef {
+                      header: header,
+                      files: files,
+                      trailer: trailer,
+                  })
+}
 
 #[cfg(test)]
 mod tests {

@@ -19,10 +19,11 @@ impl error::Error for Box<Error> {
 
 impl Error for Box<Error> {}
 
+#[macro_export]
 macro_rules! from_error {
     ($($p:ty,)*) => (
-        $(impl From<$p> for Box<Error> {
-            fn from(t: $p) -> Box<Error> { Box::new(t) }
+        $(impl From<$p> for Box<$crate::errors::Error> {
+            fn from(t: $p) -> Box<$crate::errors::Error> { Box::new(t) }
         })*
     )
 }
