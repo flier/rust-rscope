@@ -1,75 +1,58 @@
 use std::io;
 use std::fmt;
-use std::error;
-use std::result;
+use std::str;
+use std::string;
 
 use cargo;
 use syntex_syntax::errors::DiagnosticBuilder;
+use nom;
 
-pub trait Error: error::Error + Send + 'static {}
-
-impl error::Error for Box<Error> {
-    fn description(&self) -> &str {
-        (**self).description()
+error_chain! {
+    types {
+        Error, ErrorKind, ChainErr, Result;
     }
-    fn cause(&self) -> Option<&error::Error> {
-        (**self).cause()
+
+    links {
     }
-}
 
-impl Error for Box<Error> {}
+    foreign_links {
+        io::Error, IoError, "io error";
+        str::Utf8Error, Utf8Error, "convert UTF8 slice error";
+        string::FromUtf8Error, FromUtf8Error, "convert from UTF8 error";
+        Box<cargo::CargoError>, CargoError, "cargo error";
+    }
 
-#[macro_export]
-macro_rules! from_error {
-    ($($p:ty,)*) => (
-        $(impl From<$p> for Box<$crate::errors::Error> {
-            fn from(t: $p) -> Box<$crate::errors::Error> { Box::new(t) }
-        })*
-    )
-}
-
-from_error! {
-    io::Error,
-    Box<cargo::CargoError>,
-}
-
-impl Error for io::Error {}
-impl Error for Box<cargo::CargoError> {}
-
-pub struct SyntaxError {
-    pub desc: String,
-}
-
-impl fmt::Display for SyntaxError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(&self.desc, f)
+    errors {
+        SyntaxError(desc: String) {
+            description("syntax error")
+            display("syntax error, {}", desc)
+        }
+        ParseError(err: String) {
+            description("parse error")
+            display("parse error, {}", err)
+        }
+        NoMoreData(needed: nom::Needed) {
+            description("need more data")
+            display("need more data, {:?}", needed)
+        }
+        OtherError(desc: String) {
+            description("error")
+            display("error, {}", desc)
+        }
     }
 }
 
-impl fmt::Debug for SyntaxError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(self, f)
+impl<'a> From<DiagnosticBuilder<'a>> for Error {
+    fn from(d: DiagnosticBuilder<'a>) -> Self {
+        ErrorKind::SyntaxError(d.message().to_string()).into()
     }
 }
 
-impl error::Error for SyntaxError {
-    fn description(&self) -> &str {
-        &self.desc
+impl<I, E> From<nom::Err<I, E>> for Error
+    where I: fmt::Debug,
+          E: fmt::Debug
+{
+    fn from(err: nom::Err<I, E>) -> Self {
+        ErrorKind::ParseError(format!("{:?}", err)).into()
     }
 }
-
-impl Error for SyntaxError {}
-
-impl SyntaxError {
-    fn new<'a>(d: DiagnosticBuilder<'a>) -> Self {
-        SyntaxError { desc: d.message().to_string() }
-    }
-}
-
-impl<'a> From<DiagnosticBuilder<'a>> for Box<Error> {
-    fn from(d: DiagnosticBuilder<'a>) -> Box<Error> {
-        Box::new(SyntaxError::new(d))
-    }
-}
-
-pub type Result<T> = result::Result<T, Box<Error>>;
