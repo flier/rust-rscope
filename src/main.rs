@@ -1,6 +1,10 @@
 #[macro_use]
 extern crate log;
 extern crate env_logger;
+#[macro_use]
+extern crate error_chain;
+#[macro_use]
+extern crate lazy_static;
 extern crate getopts;
 extern crate num_cpus;
 extern crate memmap;
@@ -18,6 +22,7 @@ use std::time::Instant;
 use std::path::{Path, PathBuf};
 
 use cargo::util::Config;
+use memmap::{Mmap, Protection};
 
 #[macro_use]
 mod errors;
@@ -26,6 +31,7 @@ mod symbol;
 mod parser;
 mod digraph;
 mod crossref;
+mod invlib;
 mod gen;
 
 use errors::Result;
@@ -156,6 +162,33 @@ fn main() {
     let app_conf = parse_args(program, &args[1..]).expect("fail to parse arguments");
 
     debug!("parsed options: {:?}", app_conf);
+
+    if let Ok(cur_dir) = env::current_dir() {
+        let mut p = cur_dir;
+
+        p.push("cscope.out");
+
+        if p.exists() && p.is_file() {
+            let mm = Mmap::open_path(p.as_path(), Protection::Read).unwrap();
+
+            match crossref::parse(unsafe { mm.as_slice() }) {
+                nom::IResult::Done(_, cf) => {
+                    info!("Load {} source files from {}",
+                          cf.files.len(),
+                          p.to_str().unwrap());
+                }
+                nom::IResult::Error(ref err) => warn!("Fail to parse crossref file, {}", err),
+                nom::IResult::Incomplete(needed) => {
+                    warn!("Incomplete crossref file, need more{} data",
+                          if let nom::Needed::Size(size) = needed {
+                              format!(" ({} bytes)", size)
+                          } else {
+                              String::new()
+                          });
+                }
+            }
+        }
+    }
 
     let cargo_conf = Config::default().expect("fail to initial cargo");
 
