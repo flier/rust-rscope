@@ -1,42 +1,45 @@
 use std::fmt;
+use std::mem;
 use std::str::{self, FromStr};
 
 use nom::{IResult, digit, space, tab, newline};
 
+use errors::{ErrorKind, Result};
 use symbol::Token;
+use digraph::{self, Decoder};
 
 pub struct CrossRef<'a> {
-    header: Header<'a>,
-    files: Vec<SourceFile<'a>>,
-    trailer: Trailer<'a>,
+    pub header: Header<'a>,
+    pub files: Vec<SourceFile<'a>>,
+    pub trailer: Trailer<'a>,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Debug)]
 pub struct Header<'a> {
-    fmt_ver: usize,
-    cur_dir: &'a str,
-    no_compress: Option<bool>,
-    inverted_index: Option<bool>,
-    truncate_symbol: Option<bool>,
-    symbols_off: Option<usize>,
-    trailer_off: usize,
+    pub fmt_ver: usize,
+    pub cur_dir: &'a str,
+    pub no_compress: Option<bool>,
+    pub inverted_index: Option<bool>,
+    pub truncate_symbol: Option<bool>,
+    pub symbols_off: Option<usize>,
+    pub trailer_off: usize,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Debug)]
 pub struct Trailer<'a> {
-    src_dirs_num: usize,
-    src_dirs: Vec<&'a str>,
-    inc_dirs_num: usize,
-    inc_dirs: Vec<&'a str>,
-    src_files_num: usize,
-    skip_spaces: usize,
-    src_files: Vec<&'a str>,
+    pub src_dirs_num: usize,
+    pub src_dirs: Vec<&'a str>,
+    pub inc_dirs_num: usize,
+    pub inc_dirs: Vec<&'a str>,
+    pub src_files_num: usize,
+    pub skip_spaces: usize,
+    pub src_files: Vec<&'a str>,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Debug)]
 pub struct SourceFile<'a> {
-    filename: &'a str,
-    lines: Vec<SourceLine<'a>>,
+    pub filename: &'a str,
+    pub lines: Vec<SourceLine<'a>>,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Debug)]
@@ -47,8 +50,8 @@ pub enum Symbol<'a> {
 
 #[derive(PartialEq, Eq, PartialOrd, Debug)]
 pub struct SourceLine<'a> {
-    line_num: usize,
-    symbols: Vec<Symbol<'a>>,
+    pub line_num: usize,
+    pub symbols: Vec<Symbol<'a>>,
 }
 
 named!(digits<usize>,
@@ -211,6 +214,221 @@ pub fn parse<'a>(buf: &'a [u8]) -> IResult<&'a [u8], CrossRef<'a>> {
                   })
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Debug)]
+pub enum VisitResult<T> {
+    Terminated(T),
+    Continue,
+}
+
+pub trait Visitor<T> {
+    fn visit_header<'a>(&mut self, header: &Header<'a>) -> Result<VisitResult<T>>;
+
+    fn visit_trailer<'a>(&mut self, trailer: &Trailer<'a>) -> Result<VisitResult<T>>;
+
+    fn visit_source_file<'a>(&mut self, file: &SourceFile<'a>) -> Result<VisitResult<T>>;
+
+    fn visit_source_line<'a>(&mut self,
+                             filename: &str,
+                             line: &SourceLine<'a>)
+                             -> Result<VisitResult<T>>;
+
+    fn visit_symbol(&mut self,
+                    filename: &str,
+                    line_num: usize,
+                    token: Token,
+                    text: String)
+                    -> Result<VisitResult<T>>;
+
+    fn visit_text(&mut self,
+                  filename: &str,
+                  line_num: usize,
+                  text: String)
+                  -> Result<VisitResult<T>>;
+}
+
+macro_rules! try_walk {
+    ($expr:expr) => (
+        match try!($expr) {
+            VisitResult::Continue => {}
+            VisitResult::Terminated(ret) => return Ok(VisitResult::Terminated(ret)),
+        }
+    )
+}
+
+pub trait TextDecoder {
+    fn decode<'a>(&self, s: &'a [u8]) -> Result<String>;
+}
+
+pub struct SimpleVisitor {
+    decoder: Option<digraph::Digraph>,
+}
+
+impl SimpleVisitor {
+    fn new(encoded: bool) -> Self {
+        SimpleVisitor {
+            decoder: if encoded {
+                Some(digraph::new())
+            } else {
+                None
+            },
+        }
+    }
+}
+
+impl Default for SimpleVisitor {
+    fn default() -> Self {
+        unsafe { mem::zeroed() }
+    }
+}
+
+impl TextDecoder for SimpleVisitor {
+    fn decode<'a>(&self, s: &'a [u8]) -> Result<String> {
+        Ok(if let Some(ref decoder) = self.decoder {
+            try!(String::from_utf8(decoder.decode(s)))
+        } else {
+            String::from(try!(str::from_utf8(s)))
+        })
+    }
+}
+
+impl<T> Visitor<T> for SimpleVisitor {
+    fn visit_header<'a>(&mut self, header: &Header<'a>) -> Result<VisitResult<T>> {
+        if let Some(true) = header.no_compress {
+            self.decoder = Some(digraph::new());
+        }
+
+        debug!("visit header v{} with {} text", header.fmt_ver,
+               if self.decoder.is_some() { "encoded"} else { "plain" } );
+
+        Ok(VisitResult::Continue)
+    }
+
+    fn visit_trailer<'a>(&mut self, trailer: &Trailer<'a>) -> Result<VisitResult<T>> {
+        debug!("visit trailer with {} source files", trailer.src_files.len());
+
+        Ok(VisitResult::Continue)
+    }
+
+    fn visit_source_file<'a>(&mut self, file: &SourceFile<'a>) -> Result<VisitResult<T>> {
+        walk_source_file(file, self)
+    }
+
+    fn visit_source_line<'a>(&mut self,
+                             filename: &str,
+                             line: &SourceLine<'a>)
+                             -> Result<VisitResult<T>> {
+        walk_source_line(filename, line, self)
+    }
+
+    fn visit_symbol(&mut self,
+                    filename: &str,
+                    line_num: usize,
+                    token: Token,
+                    text: String)
+                    -> Result<VisitResult<T>> {
+        Ok(VisitResult::Continue)
+    }
+
+    fn visit_text(&mut self,
+                  filename: &str,
+                  line_num: usize,
+                  text: String)
+                  -> Result<VisitResult<T>> {
+        Ok(VisitResult::Continue)
+    }
+}
+
+pub fn walk_source_file<'a, T, V: Visitor<T>>(file: &SourceFile<'a>,
+                                              visitor: &mut V)
+                                              -> Result<VisitResult<T>> {
+    debug!("visit source file `{}` with {} lines", file.filename, file.lines.len());
+
+    for line in &file.lines {
+        try_walk!(visitor.visit_source_line(file.filename, &line));
+    }
+
+    Ok(VisitResult::Continue)
+}
+
+pub fn walk_source_line<'a, T, V: Visitor<T> + TextDecoder>(filename: &str,
+                                                            line: &SourceLine<'a>,
+                                                            visitor: &mut V)
+                                                            -> Result<VisitResult<T>> {
+    debug!("visit line #{} with {} symbols", line.line_num, line.symbols.len());
+
+    for symbol in &line.symbols {
+        try_walk!(walk_symbol(filename, line.line_num, symbol, visitor));
+    }
+
+    Ok(VisitResult::Continue)
+}
+
+pub fn walk_symbol<'a, T, V: Visitor<T> + TextDecoder>(filename: &str,
+                                                       line_num: usize,
+                                                       symbol: &Symbol,
+                                                       visitor: &mut V)
+                                                       -> Result<VisitResult<T>> {
+    match *symbol {
+        Symbol::Symbol(token, text) => {
+            let text = try!(visitor.decode(text));
+
+            debug!("visit {:?} symbol: `{}`", token, text);
+
+            try_walk!(visitor.visit_symbol(filename, line_num, token, text));
+        }
+        Symbol::Text(text) => {
+            let text = try!(visitor.decode(text));
+
+            debug!("visit text: `{}`", text);
+
+            try_walk!(visitor.visit_text(filename, line_num, text));
+        }
+    }
+
+    Ok(VisitResult::Continue)
+}
+
+macro_rules! try_parse {
+    ($i:expr, $submac:ident!( $($args:tt)* )) => (
+        match $submac!($i, $($args)*) {
+            ::nom::IResult::Done(i,o) => (i,o),
+            ::nom::IResult::Error(err) => {
+                return Err(err.into());
+            },
+            ::nom::IResult::Incomplete(needed) => {
+                return Err(ErrorKind::NoMoreData(needed).into());
+            },
+        }
+    );
+    ($i:expr, $f:expr) => (
+        try_parse!($i, call!($f))
+    );
+}
+
+pub fn walk<'a, T, V: Visitor<T>>(buf: &'a [u8], visitor: &mut V) -> Result<VisitResult<T>> {
+    let (rest, header) = try_parse!(buf, header);
+
+    try_walk!(visitor.visit_header(&header));
+
+    let (symbols_buf, trailer_buf) = rest.split_at(header.trailer_off);
+
+    let (_, trailer) = try_parse!(trailer_buf, trailer);
+
+    try_walk!(visitor.visit_trailer(&trailer));
+
+    let mut buf = symbols_buf;
+
+    for _ in 0..trailer.src_files.len() {
+        let (rest, file) = try_parse!(buf, source_file);
+
+        try_walk!(visitor.visit_source_file(&file));
+
+        buf = rest;
+    }
+
+    Ok(VisitResult::Continue)
+}
+
 impl<'a> fmt::Display for Header<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let symbols_off = self.symbols_off.map_or(String::new(), |off| format!(" {:010}", off));
@@ -296,6 +514,8 @@ impl<'a> fmt::Display for CrossRef<'a> {
 
 #[cfg(test)]
 mod tests {
+    extern crate env_logger;
+
     use std::str;
 
     use nom::IResult;
@@ -318,6 +538,8 @@ mod tests {
 
     #[test]
     fn parse_header() {
+        let _ = env_logger::init();
+
         assert_parser!(
             b"cscope 15 $HOME/github/rust -q 0000134629 0061565201\n",
             header,
@@ -334,6 +556,8 @@ mod tests {
 
     #[test]
     fn parse_trailer() {
+        let _ = env_logger::init();
+
         assert_parser!(
             br#"1
 .
@@ -360,6 +584,8 @@ src/compiler-rt/include/sanitizer/asan_interface.h
 
     #[test]
     fn parse_symbol() {
+        let _ = env_logger::init();
+
         assert_symbol!(b"\t$Block_size\n", Token::FuncDef, b"Block_size");
         assert_symbol!(b"\t`_Block_assign\n", Token::FuncCall, b"_Block_assign");
         assert_symbol!(b"\t}\n", Token::FuncEnd, b"");
@@ -384,6 +610,8 @@ src/compiler-rt/include/sanitizer/asan_interface.h
 
     #[test]
     fn parse_source_line() {
+        let _ = env_logger::init();
+
         assert_parser!(
             br#"11940 {
 INT64_C
@@ -407,19 +635,9 @@ p
 
     #[test]
     fn parse_source_file() {
-        assert_parser!(
-            b"\t@src/compiler-rt/test/builtins/Unit/floatditf_test.c\n\
-\n\
-14 \n\
-\t~\"int_lib.h\n\
-\"\n\
-\n\
-15 \n\
-\t~<float.h\n\
->\n\
-\n",
-        source_file,
-        SourceFile {
+        let _ = env_logger::init();
+
+        let parsed_file = SourceFile {
             filename: "src/compiler-rt/test/builtins/Unit/floatditf_test.c",
             lines: vec![
                     SourceLine {
@@ -434,11 +652,30 @@ p
                         line_num: 15,
                         symbols: vec![
                             Symbol::Text(b"\x02"),
-                            Symbol::Symbol(Token::Include, b"<float.h"),
+                            Symbol::Symbol(Token::Include, b"<math.h"),
                             Symbol::Text(b">")
                         ],
                     }
                 ],
-        });
+        };
+
+        let mut visitor = SimpleVisitor::new(true);
+
+        assert_eq!(walk_source_file::<bool, SimpleVisitor>(&parsed_file, &mut visitor).unwrap(),
+            VisitResult::Continue);
+
+        let lines = visitor.decode(b"\t@src/compiler-rt/test/builtins/Unit/floatditf_test.c\n\
+\n\
+14 \n\
+\t~\"int_lib.h\n\
+\"\n\
+\n\
+15 \n\
+\t~<math.h\n\
+>\n\
+\n")
+            .unwrap();
+
+        assert_parser!(lines.as_bytes(), source_file, parsed_file);
     }
 }
