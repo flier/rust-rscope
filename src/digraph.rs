@@ -1,5 +1,13 @@
 use std::fmt;
 
+pub trait Encoder {
+    fn encode(&self, buf: &[u8]) -> Vec<u8>;
+}
+
+pub trait Decoder {
+    fn decode(&self, buf: &[u8]) -> Vec<u8>;
+}
+
 pub struct Digraph {
     /// 16 most frequent first chars
     dichar1: &'static [u8],
@@ -52,20 +60,15 @@ impl Digraph {
         if self.is_dicode(b1, b2) {
             let c = 0x80 - 2 + self.dicode1[b1 as usize] + self.dicode2[b2 as usize];
 
-            debug!("encode ({} -> {}, {} -> {}) to {}",
-                   b1,
-                   self.dicode1[b1 as usize],
-                   b2,
-                   self.dicode2[b2 as usize],
-                   c);
-
             Some(c)
         } else {
             None
         }
     }
+}
 
-    pub fn compress(&self, buf: &[u8]) -> Vec<u8> {
+impl Encoder for Digraph {
+    fn encode(&self, buf: &[u8]) -> Vec<u8> {
         let mut dst = Vec::new();
         let mut i = 0;
 
@@ -81,8 +84,10 @@ impl Digraph {
 
         dst
     }
+}
 
-    pub fn decompress(&self, buf: &[u8]) -> Vec<u8> {
+impl Decoder for Digraph {
+    fn decode(&self, buf: &[u8]) -> Vec<u8> {
         let mut dst = Vec::new();
 
         for b in buf {
@@ -112,9 +117,7 @@ mod tests {
 
         let d = new();
 
-        debug!("{:?}", d);
-
-        assert_eq!(d.compress(b"test"), b"\x8b\xa1");
-        assert_eq!(d.decompress(b"\x8b\xa1"), b"test");
+        assert_eq!(d.encode(b"test"), b"\x8b\xa1");
+        assert_eq!(d.decode(b"\x8b\xa1"), b"test");
     }
 }
