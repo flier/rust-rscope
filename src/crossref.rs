@@ -1,5 +1,6 @@
 use std::fmt;
 use std::mem;
+use std::marker;
 use std::str::{self, FromStr};
 
 use nom::{IResult, digit, space, tab, newline};
@@ -221,29 +222,45 @@ pub enum VisitResult<T> {
 }
 
 pub trait Visitor<T> {
-    fn visit_header<'a>(&mut self, header: &Header<'a>) -> Result<VisitResult<T>>;
+    fn visit_header<'a>(&mut self, header: &Header<'a>) -> Result<VisitResult<T>> {
+        Ok(VisitResult::Continue)
+    }
 
-    fn visit_trailer<'a>(&mut self, trailer: &Trailer<'a>) -> Result<VisitResult<T>>;
+    fn visit_trailer<'a>(&mut self, trailer: &Trailer<'a>) -> Result<VisitResult<T>> {
+        Ok(VisitResult::Continue)
+    }
 
-    fn visit_source_file<'a>(&mut self, file: &SourceFile<'a>) -> Result<VisitResult<T>>;
+    fn visit_source_file<'a>(&mut self, file: &SourceFile<'a>) -> Result<VisitResult<T>>
+        where Self: TextDecoder + marker::Sized
+    {
+        walk_source_file(file, self)
+    }
 
     fn visit_source_line<'a>(&mut self,
                              filename: &str,
                              line: &SourceLine<'a>)
-                             -> Result<VisitResult<T>>;
+                             -> Result<VisitResult<T>>
+        where Self: TextDecoder + marker::Sized
+    {
+        walk_source_line(filename, line, self)
+    }
 
     fn visit_symbol(&mut self,
                     filename: &str,
                     line_num: usize,
                     token: Token,
                     text: String)
-                    -> Result<VisitResult<T>>;
+                    -> Result<VisitResult<T>> {
+        Ok(VisitResult::Continue)
+    }
 
     fn visit_text(&mut self,
                   filename: &str,
                   line_num: usize,
                   text: String)
-                  -> Result<VisitResult<T>>;
+                  -> Result<VisitResult<T>> {
+        Ok(VisitResult::Continue)
+    }
 }
 
 macro_rules! try_walk {
@@ -293,6 +310,9 @@ impl TextDecoder for SimpleVisitor {
 
 impl<T> Visitor<T> for SimpleVisitor {
     fn visit_header<'a>(&mut self, header: &Header<'a>) -> Result<VisitResult<T>> {
+        debug!("visit header v{} with {} text", header.fmt_ver,
+               if self.decoder.is_some() { "encoded"} else { "plain" } );
+
         if let Some(true) = header.no_compress {
             self.decoder = Some(digraph::new());
         }
@@ -302,45 +322,11 @@ impl<T> Visitor<T> for SimpleVisitor {
 
         Ok(VisitResult::Continue)
     }
-
-    fn visit_trailer<'a>(&mut self, trailer: &Trailer<'a>) -> Result<VisitResult<T>> {
-        debug!("visit trailer with {} source files", trailer.src_files.len());
-
-        Ok(VisitResult::Continue)
-    }
-
-    fn visit_source_file<'a>(&mut self, file: &SourceFile<'a>) -> Result<VisitResult<T>> {
-        walk_source_file(file, self)
-    }
-
-    fn visit_source_line<'a>(&mut self,
-                             filename: &str,
-                             line: &SourceLine<'a>)
-                             -> Result<VisitResult<T>> {
-        walk_source_line(filename, line, self)
-    }
-
-    fn visit_symbol(&mut self,
-                    filename: &str,
-                    line_num: usize,
-                    token: Token,
-                    text: String)
-                    -> Result<VisitResult<T>> {
-        Ok(VisitResult::Continue)
-    }
-
-    fn visit_text(&mut self,
-                  filename: &str,
-                  line_num: usize,
-                  text: String)
-                  -> Result<VisitResult<T>> {
-        Ok(VisitResult::Continue)
-    }
 }
 
-pub fn walk_source_file<'a, T, V: Visitor<T>>(file: &SourceFile<'a>,
-                                              visitor: &mut V)
-                                              -> Result<VisitResult<T>> {
+pub fn walk_source_file<'a, T, V>(file: &SourceFile<'a>, visitor: &mut V) -> Result<VisitResult<T>>
+    where V: Visitor<T> + TextDecoder + marker::Sized
+{
     debug!("visit source file `{}` with {} lines", file.filename, file.lines.len());
 
     for line in &file.lines {
@@ -350,10 +336,12 @@ pub fn walk_source_file<'a, T, V: Visitor<T>>(file: &SourceFile<'a>,
     Ok(VisitResult::Continue)
 }
 
-pub fn walk_source_line<'a, T, V: Visitor<T> + TextDecoder>(filename: &str,
-                                                            line: &SourceLine<'a>,
-                                                            visitor: &mut V)
-                                                            -> Result<VisitResult<T>> {
+pub fn walk_source_line<'a, T, V>(filename: &str,
+                                  line: &SourceLine<'a>,
+                                  visitor: &mut V)
+                                  -> Result<VisitResult<T>>
+    where V: Visitor<T> + TextDecoder + marker::Sized
+{
     debug!("visit line #{} with {} symbols", line.line_num, line.symbols.len());
 
     for symbol in &line.symbols {
@@ -405,7 +393,9 @@ macro_rules! try_parse {
     );
 }
 
-pub fn walk<'a, T, V: Visitor<T>>(buf: &'a [u8], visitor: &mut V) -> Result<VisitResult<T>> {
+pub fn walk<'a, T, V>(buf: &'a [u8], visitor: &mut V) -> Result<VisitResult<T>>
+    where V: Visitor<T> + TextDecoder
+{
     let (rest, header) = try_parse!(buf, header);
 
     try_walk!(visitor.visit_header(&header));
@@ -521,7 +511,6 @@ mod tests {
     use nom::IResult;
 
     use super::*;
-    use super::super::digraph;
     use super::super::symbol::Token;
 
     macro_rules! assert_parser {
