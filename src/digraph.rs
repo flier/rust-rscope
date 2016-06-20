@@ -72,7 +72,7 @@ impl Encoder for Digraph {
         let mut dst = Vec::new();
         let mut i = 0;
 
-        while i < buf.len() {
+        while i < buf.len() - 1 {
             if let Some(c) = self.to_dicode(buf[i], buf[i + 1]) {
                 dst.push(c);
                 i += 2;
@@ -80,6 +80,10 @@ impl Encoder for Digraph {
                 dst.push(buf[i]);
                 i += 1;
             }
+        }
+
+        if i < buf.len() {
+            dst.push(buf[i]);
         }
 
         dst
@@ -105,6 +109,18 @@ impl Decoder for Digraph {
     }
 }
 
+lazy_static! {
+    static ref DEFAULT: Digraph = new();
+}
+
+pub fn encode(buf: &[u8]) -> Vec<u8> {
+    DEFAULT.encode(buf)
+}
+
+pub fn decode(buf: &[u8]) -> Vec<u8> {
+    DEFAULT.decode(buf)
+}
+
 #[cfg(test)]
 mod tests {
     extern crate env_logger;
@@ -115,9 +131,10 @@ mod tests {
     fn digraph() {
         let _ = env_logger::init();
 
-        let d = new();
+        assert_eq!(encode(b"test"), b"\x8b\xa1");
+        assert_eq!(decode(b"\x8b\xa1"), b"test");
 
-        assert_eq!(d.encode(b"test"), b"\x8b\xa1");
-        assert_eq!(d.decode(b"\x8b\xa1"), b"test");
+        assert_eq!(encode(b"int_lib.h"), b"\x9at_lib.h");
+        assert_eq!(decode(b"\x9at_lib.h"), b"int_lib.h");
     }
 }

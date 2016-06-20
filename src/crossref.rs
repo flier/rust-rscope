@@ -521,11 +521,12 @@ mod tests {
     use nom::IResult;
 
     use super::*;
+    use super::super::digraph;
     use super::super::symbol::Token;
 
     macro_rules! assert_parser {
         ($buf:expr, $parser:ident, $target:expr) => ({
-            assert_eq!($target.to_string(), str::from_utf8($buf).unwrap());
+            assert_eq!($target.to_string().as_bytes(), &$buf[..]);
             assert_eq!($parser($buf), IResult::Done(&[][..], $target));
         })
     }
@@ -644,7 +645,7 @@ p
                         line_num: 14,
                         symbols: vec![
                             Symbol::Text(b"\x02"),
-                            Symbol::Symbol(Token::Include, b"\"int_lib.h"),
+                            Symbol::Symbol(Token::Include, b"\"\x9at_lib.h"),
                             Symbol::Text(b"\"")
                         ],
                     },
@@ -652,7 +653,7 @@ p
                         line_num: 15,
                         symbols: vec![
                             Symbol::Text(b"\x02"),
-                            Symbol::Symbol(Token::Include, b"<math.h"),
+                            Symbol::Symbol(Token::Include, b"<m\xa9h.h"),
                             Symbol::Text(b">")
                         ],
                     }
@@ -664,18 +665,17 @@ p
         assert_eq!(walk_source_file::<bool, SimpleVisitor>(&parsed_file, &mut visitor).unwrap(),
             VisitResult::Continue);
 
-        let lines = visitor.decode(b"\t@src/compiler-rt/test/builtins/Unit/floatditf_test.c\n\
+        let lines = b"\t@src/compiler-rt/test/builtins/Unit/floatditf_test.c\n\
 \n\
 14 \n\
-\t~\"int_lib.h\n\
+\t~\"\x9at_lib.h\n\
 \"\n\
 \n\
 15 \n\
-\t~<math.h\n\
+\t~<m\xa9h.h\n\
 >\n\
-\n")
-            .unwrap();
+\n";
 
-        assert_parser!(lines.as_bytes(), source_file, parsed_file);
+        assert_parser!(lines, source_file, parsed_file);
     }
 }
