@@ -6,6 +6,8 @@ use std::string;
 use cargo;
 use syntex_syntax::errors::DiagnosticBuilder;
 use nom;
+use rustbox;
+use rustyline;
 
 error_chain! {
     types {
@@ -20,6 +22,9 @@ error_chain! {
         str::Utf8Error, Utf8Error, "convert UTF8 slice error";
         string::FromUtf8Error, FromUtf8Error, "convert from UTF8 error";
         Box<cargo::CargoError>, CargoError, "cargo error";
+        rustbox::InitError, TermInitError, "term init error";
+        rustbox::EventError, TermEventError, "term event error";
+        rustyline::error::ReadlineError, ReadlineError, "readline error";
     }
 
     errors {

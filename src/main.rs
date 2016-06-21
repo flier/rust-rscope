@@ -10,8 +10,11 @@ extern crate num_cpus;
 extern crate memmap;
 #[macro_use]
 extern crate nom;
+extern crate string_cache;
 extern crate cargo;
 extern crate syntex_syntax;
+extern crate rustbox;
+extern crate rustyline;
 
 use std::env;
 use std::process;
@@ -19,6 +22,7 @@ use std::thread;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use std::ops::DerefMut;
 use std::path::{Path, PathBuf};
 
 use cargo::util::Config;
@@ -33,11 +37,22 @@ mod digraph;
 mod crossref;
 mod invlib;
 mod gen;
+mod themes;
+mod ui;
 
 use errors::Result;
 
+const APP_VERSION: &'static str = "1.0";
+
 #[derive(Debug)]
 struct AppConf {
+    build_only: bool,
+    caseless: bool,
+    skip_compress: bool,
+    skip_update: bool,
+    line_mode: bool,
+    short_match: bool,
+
     jobs: usize,
     dirs: Vec<PathBuf>,
 }
@@ -110,6 +125,18 @@ fn parse_args(program: &str, args: &[String]) -> Result<AppConf> {
 
     opts.optflag("h", "help", "Print this help menu");
 
+    opts.optflag("b", "build", "Build the cross-reference only.");
+    opts.optflag("C", "caseless", "Ignore letter case when searching.");
+    opts.optflag("c",
+                 "no-compress",
+                 "Use only ASCII characters in the cross-ref file. (don't compress)");
+    opts.optflag("d", "skip-update", "Do not update the cross-reference.");
+    opts.optflag("l", "line-mode", "Line-oriented interface.");
+    opts.optflag("T",
+                 "short-match",
+                 "Use only the first eight characters to match against C symbols.");
+    opts.optflag("V", "version", "Print the version number.");
+
     let matches = match opts.parse(args) {
         Ok(m) => m,
         Err(err) => {
@@ -127,7 +154,20 @@ fn parse_args(program: &str, args: &[String]) -> Result<AppConf> {
         process::exit(0);
     }
 
+    if matches.opt_present("V") {
+        println!("{}: version {}", program, APP_VERSION);
+
+        process::exit(0);
+    }
+
     Ok(AppConf {
+        build_only: matches.opt_present("b"),
+        caseless: matches.opt_present("C"),
+        skip_compress: matches.opt_present("c"),
+        skip_update: matches.opt_present("d"),
+        line_mode: matches.opt_present("l"),
+        short_match: matches.opt_present("T"),
+
         jobs: num_cpus::get(),
 
         dirs: if matches.free.is_empty() {
@@ -190,28 +230,51 @@ fn main() {
         }
     }
 
-    let cargo_conf = Config::default().expect("fail to initial cargo");
+    if !app_conf.skip_update {
+        let cargo_conf = Config::default().expect("fail to initial cargo");
 
-    let targets = Arc::new(Mutex::new(app_conf.dirs
-        .iter()
-        .map(|ref dir| {
-            loader::load_crate(dir, &cargo_conf)
-                .expect(&format!("fail to load crate from {}", dir.to_str().unwrap()))
-        })
-        .flat_map(|(ref pkg, ref deps)| {
-            loader::find_targets(pkg, deps).expect(&format!("fail to find targets from {}", pkg))
-        })
-        .collect()));
+        let targets = Arc::new(Mutex::new(app_conf.dirs
+            .iter()
+            .map(|ref dir| {
+                loader::load_crate(dir, &cargo_conf)
+                    .expect(&format!("fail to load crate from {}", dir.to_str().unwrap()))
+            })
+            .flat_map(|(ref pkg, ref deps)| {
+                loader::find_targets(pkg, deps)
+                    .expect(&format!("fail to find targets from {}", pkg))
+            })
+            .collect()));
 
-    let rx = app_conf.start_parsers(targets);
+        let rx = app_conf.start_parsers(targets);
 
-    let mut files: Vec<parser::SourceFile> = rx.iter().collect();
+        let mut files: Vec<parser::SourceFile> = rx.iter().collect();
 
-    files.sort();
+        files.sort();
 
-    for file in files {
-        debug!("received symbols of file {} in {} lines",
-               file.path.to_str().unwrap(),
-               file.lines.len());
+        for file in files {
+            debug!("received symbols of file {} in {} lines",
+                   file.path.to_str().unwrap(),
+                   file.lines.len());
+        }
+    }
+
+    if !app_conf.build_only {
+        match if app_conf.line_mode {
+            ui::LineUI::new()
+        } else {
+            ui::TermUI::new()
+        } {
+            Ok(mut ui) => {
+                if let Err(err) = ui.run() {
+                    warn!("run UI fail")
+                }
+
+                ui.close();
+            }
+
+            Err(err) => {
+                println!("ERROR: {}", err);
+            }
+        }
     }
 }

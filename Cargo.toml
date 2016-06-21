@@ -15,10 +15,14 @@ getopts = "0.2"
 num_cpus = "0.2"
 memmap = "0.3"
 nom = "1.2"
+string_cache = "0.2"
 cargo = "0.10"
 
 syntex = "*"
 syntex_syntax = "*"
+
+rustbox = "0.8"
+rustyline = "0.2"
 
 [[bin]]
 name = "rscope"
