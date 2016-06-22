@@ -33,11 +33,14 @@ mod errors;
 mod loader;
 mod symbol;
 mod parser;
+
 mod digraph;
 mod crossref;
 mod invlib;
 mod gen;
+
 mod themes;
+mod term;
 mod ui;
 
 use errors::Result;
@@ -266,10 +269,12 @@ fn main() {
         } {
             Ok(mut ui) => {
                 if let Err(err) = ui.run() {
-                    warn!("run UI fail")
+                    warn!("run UI failed, {}", err);
                 }
 
-                ui.close();
+                if let Err(err) = ui.close() {
+                    warn!("close UI failed, {}", err);
+                }
             }
 
             Err(err) => {

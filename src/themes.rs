@@ -9,6 +9,10 @@ pub struct Theme {
     pub bg: Color,
 }
 
+pub trait HasTheme {
+    fn theme(&self) -> &Theme;
+}
+
 #[derive(Debug, Clone)]
 pub struct Themed<'a, T>(T, &'a Theme);
 
@@ -26,8 +30,8 @@ impl<'a, T> DerefMut for Themed<'a, T> {
     }
 }
 
-impl<'a, T> Themed<'a, T> {
-    pub fn theme(&self) -> &'a Theme {
+impl<'a, T> HasTheme for Themed<'a, T> {
+    fn theme(&self) -> &Theme {
         self.1
     }
 }
@@ -49,7 +53,7 @@ pub static BUTTON: Button = Button {
     },
 
     label: Theme {
-        style: rustbox::RB_REVERSE,
+        style: rustbox::RB_NORMAL,
         fg: Color::White,
         bg: Color::Black,
     },
