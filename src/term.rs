@@ -1,5 +1,5 @@
 use std::convert::From;
-use std::ops::{Add, AddAssign, Sub, SubAssign, Neg, Deref, DerefMut};
+use std::ops::{Add, AddAssign, Sub, SubAssign, Neg, Shl, Shr, BitAnd, Deref, DerefMut};
 
 use rustbox::{Key, RustBox};
 
@@ -22,12 +22,12 @@ pub fn position(x: isize, y: isize) -> Pos {
 }
 
 trait HasPosition {
-    fn position(&self) -> &Pos;
+    fn position(&self) -> Pos;
 }
 
 impl HasPosition for Pos {
-    fn position(&self) -> &Pos {
-        self
+    fn position(&self) -> Pos {
+        *self
     }
 }
 
@@ -168,9 +168,9 @@ impl Neg for Distance {
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Debug, Clone, Copy)]
-pub struct Container(Pos, Size);
+pub struct Rect(Pos, Size);
 
-impl Container {
+impl Rect {
     pub fn width(&self) -> usize {
         self.1.w
     }
@@ -180,7 +180,17 @@ impl Container {
     }
 }
 
-impl Deref for Container {
+impl Rect {
+    pub fn size(&self) -> Size {
+        self.1
+    }
+
+    pub fn move_by(&self, distance: Distance) -> Rect {
+        Rect(self.0 + distance, self.1)
+    }
+}
+
+impl Deref for Rect {
     type Target = Pos;
 
     fn deref(&self) -> &Self::Target {
@@ -188,9 +198,43 @@ impl Deref for Container {
     }
 }
 
-impl DerefMut for Container {
+impl DerefMut for Rect {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+impl Shl<Distance> for Rect {
+    type Output = Rect;
+
+    fn shl(self, rhs: Distance) -> Self::Output {
+        Rect(self.0 - rhs, self.1)
+    }
+}
+
+impl Shr<Distance> for Rect {
+    type Output = Rect;
+
+    fn shr(self, rhs: Distance) -> Self::Output {
+        Rect(self.0 + rhs, self.1)
+    }
+}
+
+impl BitAnd<Rect> for Rect {
+    type Output = Rect;
+
+    fn bitand(self, rhs: Rect) -> Self::Output {
+        Rect(self.0,
+             size(if self.0.x > rhs.0.x {
+                      self.1.w - (self.0.x - rhs.0.x) as usize
+                  } else {
+                      rhs.1.w - (rhs.0.x - self.0.x) as usize
+                  },
+                  if self.0.y > rhs.0.y {
+                      self.1.h - (self.0.y - rhs.0.y) as usize
+                  } else {
+                      rhs.1.h - (rhs.0.y - self.0.y) as usize
+                  }))
     }
 }
 
@@ -281,18 +325,77 @@ pub enum Align {
 }
 
 trait Alignment {
-    fn align_to(&self, container: &Container, align: Align) -> Pos;
+    fn align_to(&self, rect: &Rect, align: Align) -> Pos;
+}
+
+impl<T: HasContent> Alignment for T {
+    fn align_to(&self, rect: &Rect, align: Align) -> Pos {
+        let size = self.size();
+
+        let distance = match align {
+            Align::Center => {
+                distance((rect.width() - size.w) as isize / 2,
+                         (rect.height() - size.h) as isize / 2)
+            }
+            Align::Top => columns((rect.width() - size.w) / 2),
+            Align::Bottom => {
+                distance((rect.width() - size.w) as isize / 2,
+                         (rect.height() - size.h) as isize)
+            }
+            Align::Left => lines((rect.height() - size.h) / 2),
+            Align::Right => {
+                distance((rect.width() - size.w) as isize,
+                         (rect.height() - size.h) as isize / 2)
+            }
+            Align::LeftTop => distance(0, 0),
+            Align::LeftBottom => lines(rect.height() - size.h),
+            Align::RightTop => columns(rect.width() - size.w),
+            Align::RightBottom => {
+                distance((rect.width() - size.w) as isize,
+                         (rect.height() - size.h) as isize)
+            }
+        };
+
+        debug!("widget {:?} align to {:?} of {:?} with {:?}",
+               size,
+               align,
+               rect,
+               distance);
+
+        rect.position() + distance
+    }
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Debug, Clone, Copy)]
+pub enum Fill {
+    Width,
+    Height,
+    Content,
+}
+
+trait FillUp {
+    fn fill_up(&self, rect: &Rect, fill: Fill) -> Size;
+}
+
+impl<T: HasContent> FillUp for T {
+    fn fill_up(&self, rect: &Rect, fill: Fill) -> Size {
+        match fill {
+            Fill::Width => size(rect.width(), self.size().height()),
+            Fill::Height => size(self.size().width(), rect.height()),
+            Fill::Content => rect.size(),
+        }
+    }
 }
 
 pub trait Canvas {
-    fn container(&self) -> Container;
+    fn rect(&self) -> Rect;
 
     fn draw(&self, pos: &Pos, theme: &Theme, s: &str) -> Size;
 }
 
 impl Canvas for RustBox {
-    fn container(&self) -> Container {
-        Container(position(0, 0), size(self.width(), self.height()))
+    fn rect(&self) -> Rect {
+        Rect(position(0, 0), size(self.width(), self.height()))
     }
 
     fn draw(&self, pos: &Pos, theme: &Theme, s: &str) -> Size {
@@ -310,7 +413,7 @@ impl Canvas for RustBox {
 pub trait Drawable<C: Canvas> {
     fn draw(&self, canvas: &C) -> Size;
 
-    fn draw_to(&self, canvas: &C, pos: &Pos) -> Size;
+    fn draw_to(&self, canvas: &C, rect: Rect) -> Size;
 }
 
 #[derive(Debug)]
@@ -322,6 +425,8 @@ pub enum Widget<'a> {
     Space(usize),
 
     AlignTo(Box<Widget<'a>>, Align),
+
+    FillUp(Box<Widget<'a>>, Fill),
 }
 
 pub fn button<'a>(label: &str, shortcut: Key) -> Widget<'a> {
@@ -344,84 +449,59 @@ impl<'a> HasContent for Widget<'a> {
                 size(button.shortcut().as_atom().len() + button.label().len() + 2,
                      1)
             }
+
             Widget::Pannel(ref children) => {
                 size(children.iter().fold(0, |width, ref child| width + child.size().width()),
                      children.iter().map(|ref child| child.size().height()).max().unwrap())
             }
+
             Widget::Space(n) => size(n, 1),
-            Widget::AlignTo(ref w, _) => w.size(),
+
+            Widget::AlignTo(ref w, _) |
+            Widget::FillUp(ref w, _) => w.size(),
         }
-    }
-}
-
-impl<'a> Alignment for Widget<'a> {
-    fn align_to(&self, container: &Container, align: Align) -> Pos {
-        let size = self.size();
-
-        let distance = match align {
-            Align::Center => {
-                distance((container.width() - size.w) as isize / 2,
-                         (container.height() - size.h) as isize / 2)
-            }
-            Align::Top => columns((container.width() - size.w) / 2),
-            Align::Bottom => {
-                distance((container.width() - size.w) as isize / 2,
-                         (container.height() - size.h) as isize)
-            }
-            Align::Left => lines((container.height() - size.h) / 2),
-            Align::Right => {
-                distance((container.width() - size.w) as isize,
-                         (container.height() - size.h) as isize / 2)
-            }
-            Align::LeftTop => distance(0, 0),
-            Align::LeftBottom => lines(container.height() - size.h),
-            Align::RightTop => columns(container.width() - size.w),
-            Align::RightBottom => {
-                distance((container.width() - size.w) as isize,
-                         (container.height() - size.h) as isize)
-            }
-        };
-
-        debug!("widget {:?} align to {:?} of {:?} with {:?}",
-               size,
-               align,
-               container,
-               distance);
-
-        *container.position() + distance
     }
 }
 
 impl<'a, C: Canvas> Drawable<C> for Widget<'a> {
     fn draw(&self, canvas: &C) -> Size {
-        self.draw_to(canvas, &canvas.container())
+        self.draw_to(canvas, canvas.rect())
     }
 
-    fn draw_to(&self, canvas: &C, pos: &Pos) -> Size {
+    fn draw_to(&self, canvas: &C, rect: Rect) -> Size {
         match *self {
             Widget::Button(ref button) => {
-                let size = canvas.draw(&pos,
+                let size = canvas.draw(&rect.position(),
                                        &button.shortcut().theme(),
                                        &button.shortcut().as_atom());
 
-                let pos = *pos + columns(size.w);
+                let pos = rect.position() + columns(size.w);
 
                 let label = format!(" {} ", button.label().to_string());
 
                 canvas.draw(&pos, &button.label().theme(), &label) + columns(size.w)
             }
             Widget::Pannel(ref children) => {
-                let mut p = *pos;
+                let mut p = rect.position();
 
                 for child in children {
-                    p += columns(child.draw_to(canvas, &p).w);
+                    let r = (rect >> (p - rect.position())) & rect;
+
+                    p += columns(child.draw_to(canvas, r).w);
                 }
 
-                (p - *pos).as_size()
+                (p - rect.position()).as_size()
             }
             Widget::Space(n) => size(n, 1),
             Widget::AlignTo(ref w, align) => {
-                w.draw_to(canvas, &w.align_to(&canvas.container(), align))
+                let pos = w.align_to(&rect, align);
+
+                let r = (rect >> (pos - rect.position())) & rect;
+
+                w.draw_to(canvas, Rect(pos, r.size()))
+            }
+            Widget::FillUp(ref w, fill) => {
+                w.draw_to(canvas, Rect(rect.position(), w.fill_up(&rect, fill)))
             }
         }
     }

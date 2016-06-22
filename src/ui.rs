@@ -18,31 +18,32 @@ pub trait UI {
 
 pub struct TermUI<'a> {
     rb: RustBox,
-    buttons: Widget<'a>,
+    widgets: Widget<'a>,
 }
 
 impl<'a> TermUI<'a> {
     pub fn new() -> Result<Box<UI>> {
+        let toolbar = Widget::Pannel(vec![button("Symbol", Key::F(1)),
+                                          space(1),
+                                          button("Global", Key::F(2)),
+                                          space(1),
+                                          button("Func Called", Key::F(3)),
+                                          space(1),
+                                          button("Func Calling", Key::F(4)),
+                                          space(1),
+                                          button("Text", Key::F(5)),
+                                          space(1),
+                                          button("File", Key::F(6)),
+                                          space(1),
+                                          button("Include", Key::F(7)),
+                                          space(1),
+                                          button("Assign To", Key::F(8)),
+                                          space(1),
+                                          button("Quit", Key::F(9))]);
+
         Ok(Box::new(TermUI {
             rb: try!(RustBox::init(Default::default())),
-            buttons: align_to(Widget::Pannel(vec![button("Symbol", Key::F(1)),
-                                                  space(1),
-                                                  button("Global", Key::F(2)),
-                                                  space(1),
-                                                  button("Func Called", Key::F(3)),
-                                                  space(1),
-                                                  button("Func Calling", Key::F(4)),
-                                                  space(1),
-                                                  button("Text", Key::F(5)),
-                                                  space(1),
-                                                  button("File", Key::F(6)),
-                                                  space(1),
-                                                  button("Include", Key::F(7)),
-                                                  space(1),
-                                                  button("Assign To", Key::F(8)),
-                                                  space(1),
-                                                  button("Quit", Key::F(9))]),
-                              Align::LeftBottom),
+            widgets: Widget::Pannel(vec![align_to(toolbar, Align::LeftBottom)]),
         }))
     }
 
