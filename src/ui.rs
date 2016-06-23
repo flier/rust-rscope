@@ -6,8 +6,8 @@ use rustbox::{self, Key, Event, RustBox};
 use rustyline::Editor;
 
 use errors::Result;
-use term::{Drawable, Canvas, Align, Fill, Widget, position, button, input, pannel, space,
-           align_to, fill_up};
+use term::{Drawable, Canvas, Layout, Align, Fill, Widget, button, input, pannel, space, align_to,
+           fill_up};
 
 const HISTORY_FILE: &'static str = ".rscope_history";
 
@@ -50,7 +50,9 @@ impl<'a> TermUI<'a> {
                 input_mode: rustbox::InputMode::Esc,
                 buffer_stderr: true,
             })),
-            widgets: align_to(pannel(None, vec![fill_up(search, Fill::Width), toolbar]),
+            widgets: align_to(pannel(None,
+                                     vec![fill_up(search, Fill::Width),
+                                          align_to(toolbar, Align::Bottom)]),
                               Align::Bottom),
         }))
     }
@@ -58,7 +60,7 @@ impl<'a> TermUI<'a> {
     fn init(&mut self) {
         self.rb.clear();
 
-        self.widgets.draw(&self.rb);
+        self.widgets.layout(self.rb.rect()).draw(&self.rb);
 
         self.rb.present();
     }
@@ -93,7 +95,7 @@ impl<'a> UI for TermUI<'a> {
                     }
                 }
                 Event::ResizeEvent(w, h) => {
-                    debug!("resize to {{}, {}}", w, h);
+                    debug!("resize to {{{}, {}}}", w, h);
 
                     self.init();
                 }

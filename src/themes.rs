@@ -2,7 +2,7 @@ use std::ops::{Deref, DerefMut};
 
 use rustbox::{self, Color, Style};
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct Theme {
     pub style: Style,
     pub fg: Color,
@@ -13,7 +13,7 @@ pub trait HasTheme {
     fn theme(&self) -> &Theme;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct Themed<'a, T>(T, &'a Theme);
 
 impl<'a, T> Deref for Themed<'a, T> {
@@ -67,18 +67,24 @@ pub static PANNEL: Pannel = Pannel {
     label: Theme {
         style: rustbox::RB_NORMAL,
         fg: Color::White,
-        bg: Color::Black,
+        bg: Color::Default,
     },
 };
 
 pub struct Input {
-    pub prompt: Theme,
+    pub placeholder: Theme,
+    pub text: Theme,
 }
 
 pub static INPUT: Input = Input {
-    prompt: Theme {
-        style: rustbox::RB_NORMAL,
+    placeholder: Theme {
+        style: rustbox::RB_UNDERLINE,
         fg: Color::Cyan,
-        bg: Color::Black,
+        bg: Color::Default,
+    },
+    text: Theme {
+        style: rustbox::RB_NORMAL,
+        fg: Color::Yellow,
+        bg: Color::Default,
     },
 };

@@ -229,14 +229,14 @@ impl BitAnd<Rect> for Rect {
     fn bitand(self, rhs: Rect) -> Self::Output {
         Rect(self.0,
              size(if self.0.x > rhs.0.x {
-                      self.1.w - (self.0.x - rhs.0.x) as usize
+                      self.1.w.saturating_sub((self.0.x - rhs.0.x) as usize)
                   } else {
-                      rhs.1.w - (rhs.0.x - self.0.x) as usize
+                      rhs.1.w.saturating_sub((rhs.0.x - self.0.x) as usize)
                   },
                   if self.0.y > rhs.0.y {
-                      self.1.h - (self.0.y - rhs.0.y) as usize
+                      self.1.h.saturating_sub((self.0.y - rhs.0.y) as usize)
                   } else {
-                      rhs.1.h - (rhs.0.y - self.0.y) as usize
+                      rhs.1.h.saturating_sub((rhs.0.y - self.0.y) as usize)
                   }))
     }
 }
@@ -254,7 +254,7 @@ impl<'a> HasLabel<'a> for ThemedLabel<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone,  Debug)]
 struct Labeled<'a, T>(T, ThemedLabel<'a>);
 
 fn labeled<'a, T>(value: T, label: ThemedLabel<'a>) -> Labeled<'a, T> {
@@ -287,7 +287,7 @@ trait HasShortcut<'a> {
     fn shortcut(&self) -> &ThemedKey<'a>;
 }
 
-#[derive(Debug)]
+#[derive(Clone,  Debug)]
 struct Shortcut<'a, T>(T, ThemedKey<'a>);
 
 fn shortcuted<'a, T>(value: T, key: ThemedKey<'a>) -> Shortcut<'a, T> {
@@ -445,7 +445,7 @@ pub trait Drawable<C: Canvas> {
     fn draw_to(&self, canvas: &C, rect: Rect) -> Size;
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Widget<'a> {
     Button(Shortcut<'a, ThemedLabel<'a>>),
 
@@ -459,30 +459,25 @@ pub enum Widget<'a> {
 
     FillUp(Fill, Box<Widget<'a>>),
 
-    Pinned(Option<Rect>, Box<Widget<'a>>),
+    Pinned(Rect, Box<Widget<'a>>),
 }
 
 pub fn button<'a>(label: &str, shortcut: Key) -> Widget<'a> {
-    Widget::Pinned(None,
-                   Box::new(Widget::Button(shortcuted(themed(Atom::from(label),
-                                                             &themes::BUTTON.label),
-                                                      themed(shortcut, &themes::BUTTON.shortcut)))))
+    Widget::Button(shortcuted(themed(Atom::from(label), &themes::BUTTON.label),
+                              themed(shortcut, &themes::BUTTON.shortcut)))
 }
 
-pub fn input<'a>(prompt: Option<&str>) -> Widget<'a> {
-    Widget::Pinned(None,
-        Box::new(
-            Widget::Input(prompt.map(|prompt| themed(Atom::from(prompt), &themes::INPUT.prompt)))))
+pub fn input<'a>(placeholder: Option<&str>) -> Widget<'a> {
+    Widget::Input(placeholder.map(|placeholder| {
+                       themed(Atom::from(placeholder), &themes::INPUT.placeholder)
+                   }))
 }
 
 pub fn pannel<'a, I>(label: Option<&str>, iter: I) -> Widget<'a>
     where I: IntoIterator<Item = Widget<'a>>
 {
-    Widget::Pinned(None,
-                   Box::new(Widget::Pannel(label.map(|label| {
-                                               themed(Atom::from(label), &themes::PANNEL.label)
-                                           }),
-                                           Vec::from_iter(iter))))
+    Widget::Pannel(label.map(|label| themed(Atom::from(label), &themes::PANNEL.label)),
+                   Vec::from_iter(iter))
 }
 
 pub fn space<'a>(n: usize) -> Widget<'a> {
@@ -572,21 +567,106 @@ impl<'a> AutoSize for Widget<'a> {
 
             Widget::FillUp(fill, ref w) => w.fill_up(parent_size, fill),
 
-            Widget::Pinned(ref pinned, ref w) => {
-                if let &Some(ref r) = pinned {
-                    r.size()
-                } else {
-                    w.preferred_size(parent_size)
-                }
-            }
+            Widget::Pinned(ref pinned, _) => pinned.size(),
         };
 
-        debug!("widget {} preferred size {:?} within parent {:?}",
+        debug!("widget {} preferred {:?} within parent {:?}",
                self,
                preferred_size,
                parent_size);
 
         preferred_size
+    }
+}
+
+pub trait Layout {
+    fn layout(&self, rect: Rect) -> Self;
+}
+
+impl<'a> Layout for Widget<'a> {
+    fn layout(&self, rect: Rect) -> Self {
+        match *self {
+            Widget::Button(_) |
+            Widget::Input(_) => {
+                let pinned = Rect(rect.position(), self.preferred_size(&rect.size()));
+
+                debug!("widget {} pinned to {:?}", self, pinned);
+
+                Widget::Pinned(pinned, Box::new(self.clone()))
+            }
+
+            Widget::Space(_) |
+            Widget::Pinned(_, _) => self.clone(),
+
+            Widget::Pannel(ref label, ref children) => {
+                let mut widgets = Vec::new();
+                let mut x = 0;
+                let mut y = 0;
+                let mut cur_height: usize = 0;
+                let parent_size = rect.size();
+
+                for child in children {
+                    let child_size = child.preferred_size(&parent_size);
+
+                    if x + child_size.width() > parent_size.width() {
+                        x = 0;
+                        y += cur_height;
+                    }
+
+                    let pinned = (rect >> distance(x as isize, y as isize)) & rect;
+
+                    widgets.push(Widget::Pinned(pinned, Box::new(child.layout(pinned))));
+
+                    x += child_size.width();
+                    cur_height = cmp::max(cur_height, child_size.height());
+                }
+
+                y += cur_height;
+
+                Widget::Pinned(Rect(rect.position(), size(x, y)),
+                               Box::new(Widget::Pannel(label.clone(), widgets)))
+            }
+
+            Widget::AlignTo(align, ref w) => {
+                let pos = w.align_to(&rect, align);
+                let r = (rect >> (pos - rect.position())) & rect;
+                let size = w.preferred_size(&r.size());
+                let pinned = Rect(pos, size);
+
+                debug!("widget {} pinned to {:?} after align {:?} within {:?}",
+                       w,
+                       pinned,
+                       align,
+                       rect);
+
+                let child = w.layout(pinned);
+
+                Widget::Pinned(pinned,
+                               if let Widget::Pinned(_, ref w) = child {
+                                   w.clone()
+                               } else {
+                                   Box::new(child)
+                               })
+            }
+            Widget::FillUp(fill, ref w) => {
+                let pinned = Rect(rect.position(), w.fill_up(&rect.size(), fill));
+
+                debug!("widget {} draw to {:?} after fill {:?} within {:?}",
+                       w,
+                       pinned,
+                       fill,
+                       rect);
+
+                let child = w.layout(pinned);
+
+                Widget::Pinned(pinned,
+                               if let Widget::Pinned(_, ref w) = child {
+                                   w.clone()
+                               } else {
+                                   Box::new(child)
+                               })
+            }
+        }
     }
 }
 
@@ -662,34 +742,16 @@ impl<'a, C: Canvas> Drawable<C> for Widget<'a> {
 
             Widget::Space(n) => size(n, 1),
 
-            Widget::AlignTo(align, ref w) => {
-                let pos = w.align_to(&rect, align);
-
-                debug!("widget {} draw to {:?} after align {:?} within {:?}",
-                       w,
-                       pos,
-                       align,
-                       rect);
-
-                let r = (rect >> (pos - rect.position())) & rect;
-
-                w.draw_to(canvas, Rect(pos, r.size()))
+            Widget::AlignTo(_, ref w) |
+            Widget::FillUp(_, ref w) => {
+                if let Widget::Pinned(pinned, w) = w.layout(rect) {
+                    w.draw_to(canvas, pinned)
+                } else {
+                    size(0, 0)
+                }
             }
 
-            Widget::FillUp(fill, ref w) => {
-                let pos = rect.position();
-                let r = w.fill_up(&rect.size(), fill);
-
-                debug!("widget {} draw to {:?} after fill {:?} within {:?}",
-                       w,
-                       pos,
-                       fill,
-                       rect);
-
-                w.draw_to(canvas, Rect(pos, r))
-            }
-
-            Widget::Pinned(ref pinned, ref w) => w.draw_to(canvas, pinned.unwrap_or(rect)),
+            Widget::Pinned(pinned, ref w) => w.draw_to(canvas, pinned),
         }
     }
 }
