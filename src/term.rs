@@ -1,4 +1,7 @@
+use std::fmt;
+use std::cmp;
 use std::convert::From;
+use std::iter::FromIterator;
 use std::ops::{Add, AddAssign, Sub, SubAssign, Neg, Shl, Shr, BitAnd, Deref, DerefMut};
 
 use rustbox::{Key, RustBox};
@@ -6,10 +9,6 @@ use rustbox::{Key, RustBox};
 use string_cache::Atom;
 
 use themes::{self, Theme, HasTheme, Themed, themed};
-
-trait HasContent {
-    fn size(&self) -> Size;
-}
 
 #[derive(PartialEq, Eq, PartialOrd, Debug, Clone, Copy)]
 pub struct Pos {
@@ -91,6 +90,10 @@ impl Size {
 
     pub fn height(&self) -> usize {
         self.h
+    }
+
+    pub fn as_distance(&self) -> Distance {
+        distance(self.w as isize, self.h as isize)
     }
 }
 
@@ -311,7 +314,15 @@ impl<'a, T> HasShortcut<'a> for Shortcut<'a, T> {
     }
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Debug, Clone, Copy)]
+trait AutoSize {
+    fn preferred_size(&self, size: &Size) -> Size;
+}
+
+trait Named {
+    fn name(&self) -> Atom;
+}
+
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Align {
     Center,
     Top,
@@ -328,9 +339,9 @@ trait Alignment {
     fn align_to(&self, rect: &Rect, align: Align) -> Pos;
 }
 
-impl<T: HasContent> Alignment for T {
+impl<T: AutoSize + fmt::Display> Alignment for T {
     fn align_to(&self, rect: &Rect, align: Align) -> Pos {
-        let size = self.size();
+        let size = self.preferred_size(&rect.size());
 
         let distance = match align {
             Align::Center => {
@@ -356,17 +367,21 @@ impl<T: HasContent> Alignment for T {
             }
         };
 
-        debug!("widget {:?} align to {:?} of {:?} with {:?}",
+        let pos = rect.position() + distance;
+
+        debug!("widget {} {:?} align to {:?} of {:?} with {:?} to {:?}",
+               self,
                size,
                align,
                rect,
-               distance);
+               distance,
+               pos);
 
-        rect.position() + distance
+        pos
     }
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Fill {
     Width,
     Height,
@@ -374,16 +389,30 @@ pub enum Fill {
 }
 
 trait FillUp {
-    fn fill_up(&self, rect: &Rect, fill: Fill) -> Size;
+    fn fill_up(&self, size: &Size, fill: Fill) -> Size;
 }
 
-impl<T: HasContent> FillUp for T {
-    fn fill_up(&self, rect: &Rect, fill: Fill) -> Size {
-        match fill {
-            Fill::Width => size(rect.width(), self.size().height()),
-            Fill::Height => size(self.size().width(), rect.height()),
-            Fill::Content => rect.size(),
-        }
+impl<T: AutoSize + fmt::Display> FillUp for T {
+    fn fill_up(&self, parent_size: &Size, fill: Fill) -> Size {
+        let fillup_size = match fill {
+            Fill::Width => {
+                size(parent_size.width(),
+                     self.preferred_size(&parent_size).height())
+            }
+            Fill::Height => {
+                size(self.preferred_size(&parent_size).width(),
+                     parent_size.height())
+            }
+            Fill::Content => *parent_size,
+        };
+
+        debug!("widget {} fill {:?} up to {:?} base on {:?}",
+               self,
+               fill,
+               fillup_size,
+               parent_size);
+
+        fillup_size
     }
 }
 
@@ -420,18 +449,40 @@ pub trait Drawable<C: Canvas> {
 pub enum Widget<'a> {
     Button(Shortcut<'a, ThemedLabel<'a>>),
 
-    Pannel(Vec<Widget<'a>>),
+    Input(Option<ThemedLabel<'a>>),
+
+    Pannel(Option<ThemedLabel<'a>>, Vec<Widget<'a>>),
 
     Space(usize),
 
-    AlignTo(Box<Widget<'a>>, Align),
+    AlignTo(Align, Box<Widget<'a>>),
 
-    FillUp(Box<Widget<'a>>, Fill),
+    FillUp(Fill, Box<Widget<'a>>),
+
+    Pinned(Option<Rect>, Box<Widget<'a>>),
 }
 
 pub fn button<'a>(label: &str, shortcut: Key) -> Widget<'a> {
-    Widget::Button(shortcuted(themed(Atom::from(label), &themes::BUTTON.label),
-                              themed(shortcut, &themes::BUTTON.shortcut)))
+    Widget::Pinned(None,
+                   Box::new(Widget::Button(shortcuted(themed(Atom::from(label),
+                                                             &themes::BUTTON.label),
+                                                      themed(shortcut, &themes::BUTTON.shortcut)))))
+}
+
+pub fn input<'a>(prompt: Option<&str>) -> Widget<'a> {
+    Widget::Pinned(None,
+        Box::new(
+            Widget::Input(prompt.map(|prompt| themed(Atom::from(prompt), &themes::INPUT.prompt)))))
+}
+
+pub fn pannel<'a, I>(label: Option<&str>, iter: I) -> Widget<'a>
+    where I: IntoIterator<Item = Widget<'a>>
+{
+    Widget::Pinned(None,
+                   Box::new(Widget::Pannel(label.map(|label| {
+                                               themed(Atom::from(label), &themes::PANNEL.label)
+                                           }),
+                                           Vec::from_iter(iter))))
 }
 
 pub fn space<'a>(n: usize) -> Widget<'a> {
@@ -439,27 +490,103 @@ pub fn space<'a>(n: usize) -> Widget<'a> {
 }
 
 pub fn align_to<'a>(w: Widget<'a>, align: Align) -> Widget<'a> {
-    Widget::AlignTo(Box::new(w), align)
+    Widget::AlignTo(align, Box::new(w))
 }
 
-impl<'a> HasContent for Widget<'a> {
-    fn size(&self) -> Size {
+pub fn fill_up<'a>(w: Widget<'a>, fill: Fill) -> Widget<'a> {
+    Widget::FillUp(fill, Box::new(w))
+}
+
+impl<'a> fmt::Display for Widget<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
+            Widget::Button(ref label) => write!(f, "Button({})", label.to_string()),
+            Widget::Input(ref prompt) => {
+                write!(f,
+                       "Input({})",
+                       if let &Some(ref prompt) = prompt {
+                           prompt.to_string()
+                       } else {
+                           String::new()
+                       })
+            }
+            Widget::Pannel(ref label, _) => {
+                write!(f,
+                       "Pannel({})",
+                       if let &Some(ref label) = label {
+                           label.to_string()
+                       } else {
+                           String::new()
+                       })
+            }
+            Widget::Space(n) => write!(f, "Space({})", n),
+            Widget::AlignTo(align, _) => write!(f, "AlignTo({:?})", align),
+            Widget::FillUp(fill, _) => write!(f, "FillUp({:?})", fill),
+            Widget::Pinned(ref pinned, ref w) => write!(f, "Pinned({:?}, {})", pinned, w),
+        }
+    }
+}
+
+impl<'a> AutoSize for Widget<'a> {
+    fn preferred_size(&self, parent_size: &Size) -> Size {
+        let preferred_size = match *self {
             Widget::Button(ref button) => {
                 size(button.shortcut().as_atom().len() + button.label().len() + 2,
                      1)
             }
 
-            Widget::Pannel(ref children) => {
-                size(children.iter().fold(0, |width, ref child| width + child.size().width()),
-                     children.iter().map(|ref child| child.size().height()).max().unwrap())
+            Widget::Input(ref prompt) => {
+                match *prompt {
+                    Some(ref prompt) => size(prompt.len(), 1),
+                    None => size(0, 1),
+                }
+            }
+
+            Widget::Pannel(_, ref children) => {
+                let mut x = 0;
+                let mut y = 0;
+                let mut max_width = 0;
+                let mut cur_height = 0;
+
+                for child in children {
+                    let child_size = child.preferred_size(parent_size);
+
+                    if x + child_size.width() > parent_size.width() {
+                        x = 0;
+                        y += cur_height;
+                    }
+
+                    x += child_size.width();
+                    max_width = cmp::max(max_width, x);
+                    cur_height = cmp::max(cur_height, child_size.height());
+                }
+
+                y += cur_height;
+
+                size(max_width, y)
             }
 
             Widget::Space(n) => size(n, 1),
 
-            Widget::AlignTo(ref w, _) |
-            Widget::FillUp(ref w, _) => w.size(),
-        }
+            Widget::AlignTo(_, ref w) => w.preferred_size(parent_size),
+
+            Widget::FillUp(fill, ref w) => w.fill_up(parent_size, fill),
+
+            Widget::Pinned(ref pinned, ref w) => {
+                if let &Some(ref r) = pinned {
+                    r.size()
+                } else {
+                    w.preferred_size(parent_size)
+                }
+            }
+        };
+
+        debug!("widget {} preferred size {:?} within parent {:?}",
+               self,
+               preferred_size,
+               parent_size);
+
+        preferred_size
     }
 }
 
@@ -479,30 +606,90 @@ impl<'a, C: Canvas> Drawable<C> for Widget<'a> {
 
                 let label = format!(" {} ", button.label().to_string());
 
+                debug!("widget {} draw to {:?}", self, pos);
+
                 canvas.draw(&pos, &button.label().theme(), &label) + columns(size.w)
             }
-            Widget::Pannel(ref children) => {
-                let mut p = rect.position();
+
+            Widget::Input(ref prompt) => {
+                if let &Some(ref prompt) = prompt {
+                    debug!("widget {} draw to {:?}", self, rect.position());
+
+                    let mut underline = Vec::new();
+
+                    underline.resize(rect.width(), b' ');
+
+                    let size = canvas.draw(&rect.position(),
+                                           &prompt.theme(),
+                                           &String::from_utf8(underline).unwrap());
+
+                    canvas.draw(&rect.position(), &prompt.theme(), &prompt);
+
+                    size
+                } else {
+                    size(0, 0)
+                }
+            }
+
+            Widget::Pannel(_, ref children) => {
+                debug!("widget {} draw to {:?}", self, rect.position());
+
+                let mut x = 0;
+                let mut y = 0;
+                let mut cur_height: usize = 0;
+                let parent_size = rect.size();
 
                 for child in children {
-                    let r = (rect >> (p - rect.position())) & rect;
+                    let child_size = child.preferred_size(&parent_size);
 
-                    p += columns(child.draw_to(canvas, r).w);
+                    if x + child_size.width() > parent_size.width() {
+                        x = 0;
+                        y += cur_height;
+                    }
+
+                    let r = (rect >> distance(x as isize, y as isize)) & rect;
+
+                    child.draw_to(canvas, r);
+
+                    x += child_size.width();
+                    cur_height = cmp::max(cur_height, child_size.height());
                 }
 
-                (p - rect.position()).as_size()
+                y += cur_height;
+
+                size(x, y)
             }
+
             Widget::Space(n) => size(n, 1),
-            Widget::AlignTo(ref w, align) => {
+
+            Widget::AlignTo(align, ref w) => {
                 let pos = w.align_to(&rect, align);
+
+                debug!("widget {} draw to {:?} after align {:?} within {:?}",
+                       w,
+                       pos,
+                       align,
+                       rect);
 
                 let r = (rect >> (pos - rect.position())) & rect;
 
                 w.draw_to(canvas, Rect(pos, r.size()))
             }
-            Widget::FillUp(ref w, fill) => {
-                w.draw_to(canvas, Rect(rect.position(), w.fill_up(&rect, fill)))
+
+            Widget::FillUp(fill, ref w) => {
+                let pos = rect.position();
+                let r = w.fill_up(&rect.size(), fill);
+
+                debug!("widget {} draw to {:?} after fill {:?} within {:?}",
+                       w,
+                       pos,
+                       fill,
+                       rect);
+
+                w.draw_to(canvas, Rect(pos, r))
             }
+
+            Widget::Pinned(ref pinned, ref w) => w.draw_to(canvas, pinned.unwrap_or(rect)),
         }
     }
 }

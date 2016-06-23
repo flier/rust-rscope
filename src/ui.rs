@@ -1,12 +1,13 @@
 use std::env;
 use std::path::PathBuf;
 
-use rustbox::{Key, Event, RustBox};
+use rustbox::{self, Key, Event, RustBox};
 
 use rustyline::Editor;
 
 use errors::Result;
-use term::{Drawable, Align, Widget, button, space, align_to};
+use term::{Drawable, Canvas, Align, Fill, Widget, position, button, input, pannel, space,
+           align_to, fill_up};
 
 const HISTORY_FILE: &'static str = ".rscope_history";
 
@@ -23,34 +24,41 @@ pub struct TermUI<'a> {
 
 impl<'a> TermUI<'a> {
     pub fn new() -> Result<Box<UI>> {
-        let toolbar = Widget::Pannel(vec![button("Symbol", Key::F(1)),
-                                          space(1),
-                                          button("Global", Key::F(2)),
-                                          space(1),
-                                          button("Func Called", Key::F(3)),
-                                          space(1),
-                                          button("Func Calling", Key::F(4)),
-                                          space(1),
-                                          button("Text", Key::F(5)),
-                                          space(1),
-                                          button("File", Key::F(6)),
-                                          space(1),
-                                          button("Include", Key::F(7)),
-                                          space(1),
-                                          button("Assign To", Key::F(8)),
-                                          space(1),
-                                          button("Quit", Key::F(9))]);
+        let search = input(Some("search"));
+
+        let toolbar = pannel(Some("toolbar"),
+                             vec![button("Symbol", Key::F(1)),
+                                  space(1),
+                                  button("Global", Key::F(2)),
+                                  space(1),
+                                  button("Func Called", Key::F(3)),
+                                  space(1),
+                                  button("Func Calling", Key::F(4)),
+                                  space(1),
+                                  button("Text", Key::F(5)),
+                                  space(1),
+                                  button("File", Key::F(6)),
+                                  space(1),
+                                  button("Include", Key::F(7)),
+                                  space(1),
+                                  button("Assign To", Key::F(8)),
+                                  space(1),
+                                  button("Quit", Key::F(9))]);
 
         Ok(Box::new(TermUI {
-            rb: try!(RustBox::init(Default::default())),
-            widgets: Widget::Pannel(vec![align_to(toolbar, Align::LeftBottom)]),
+            rb: try!(RustBox::init(rustbox::InitOptions {
+                input_mode: rustbox::InputMode::Esc,
+                buffer_stderr: true,
+            })),
+            widgets: align_to(pannel(None, vec![fill_up(search, Fill::Width), toolbar]),
+                              Align::Bottom),
         }))
     }
 
     fn init(&mut self) {
         self.rb.clear();
 
-        self.buttons.draw(&self.rb);
+        self.widgets.draw(&self.rb);
 
         self.rb.present();
     }
@@ -83,6 +91,11 @@ impl<'a> UI for TermUI<'a> {
                             debug!("drop {:?} key", key);
                         }
                     }
+                }
+                Event::ResizeEvent(w, h) => {
+                    debug!("resize to {{}, {}}", w, h);
+
+                    self.init();
                 }
                 evt @ _ => {
                     debug!("drop {:?} event", evt);

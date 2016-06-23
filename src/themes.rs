@@ -58,3 +58,27 @@ pub static BUTTON: Button = Button {
         bg: Color::Black,
     },
 };
+
+pub struct Pannel {
+    pub label: Theme,
+}
+
+pub static PANNEL: Pannel = Pannel {
+    label: Theme {
+        style: rustbox::RB_NORMAL,
+        fg: Color::White,
+        bg: Color::Black,
+    },
+};
+
+pub struct Input {
+    pub prompt: Theme,
+}
+
+pub static INPUT: Input = Input {
+    prompt: Theme {
+        style: rustbox::RB_NORMAL,
+        fg: Color::Cyan,
+        bg: Color::Black,
+    },
+};

@@ -14,8 +14,8 @@ dependencies = [
  "rustbox 0.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustyline 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "string_cache 0.2.20 (registry+https://github.com/rust-lang/crates.io-index)",
- "syntex 0.35.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "syntex_syntax 0.35.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "syntex 0.36.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "syntex_syntax 0.36.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -87,7 +87,7 @@ dependencies = [
  "crates-io 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam 0.2.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "curl 0.2.19 (registry+https://github.com/rust-lang/crates.io-index)",
- "docopt 0.6.80 (registry+https://github.com/rust-lang/crates.io-index)",
+ "docopt 0.6.81 (registry+https://github.com/rust-lang/crates.io-index)",
  "env_logger 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "filetime 0.1.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "flate2 0.2.14 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "docopt"
-version = "0.6.80"
+version = "0.6.81"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "regex 0.1.71 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -640,15 +640,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "syntex"
-version = "0.35.0"
+version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "syntex_syntax 0.35.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "syntex_syntax 0.36.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "syntex_syntax"
-version = "0.35.0"
+version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "bitflags 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
